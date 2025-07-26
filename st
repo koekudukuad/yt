@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v4 - FINAL FIXED)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v5 - DEFINITIVE FIX)
 # ===================================================================
 
 set -e # Hentikan skrip jika ada error
@@ -114,7 +114,7 @@ ExecStart=${PYTHON_SCRIPT_PATH} stop %i
 EOF
 systemctl daemon-reload
 
-# --- 9. Tempatkan Skrip Manajemen (Python CLI) - FULLY FIXED ---
+# --- 9. Tempatkan Skrip Manajemen (Python CLI) - DEFINITIVE FIX ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
@@ -168,8 +168,16 @@ def _get_channel_mode(paths):
     return "B (Suara Utama + Latar)" if any('suara_utama' in f.name for f in audios) else "C (Playlist Audio)"
 
 def _render_audio(channel_name, paths):
+    # PERBAIKAN: Selalu hapus file render lama untuk memastikan proses bersih
+    paths["audio"].unlink(missing_ok=True)
+    paths["playlist"].unlink(missing_ok=True)
+    
     with open(paths["log"], 'a') as f: f.write(f"INFO: Memulai render audio untuk '{channel_name}'...\n")
-    audios = list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.mp3"))
+    
+    # PERBAIKAN: Ambil semua file audio lalu kecualikan file render itu sendiri
+    all_source_audios = list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.mp3"))
+    audios = [f for f in all_source_audios if f.name != paths["audio"].name]
+
     suara_utama = next((f for f in audios if 'suara_utama' in f.name), None)
     
     input_cmds, filter_complex = [], ""
@@ -223,9 +231,6 @@ def handle_start(args):
     if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{args.channel}.service"]).returncode == 0:
         return print_warn(f"Service untuk '{args.channel}' sudah berjalan.")
     
-    # Perintah start manual tidak akan menghapus jadwal yang sudah ada.
-    # Membuat file .lock untuk menandakan proses berjalan manual/lifetime.
-    # File ini akan otomatis dihapus saat 'ytlive stop' dijalankan.
     paths["lock"].write_text(LIFETIME_TAG)
     
     try:
@@ -400,7 +405,9 @@ def handle_clean(args):
             return print_warn(f"Melewatkan '{name}' karena sedang berjalan.")
         print_info(f"Membersihkan file sementara untuk '{name}'...")
         for f in [paths["audio"], paths["playlist"], paths["log"], paths["lock"]]:
-            if f.exists(): f.unlink(); print(f"  -> Dihapus: {f.name}")
+            if f.exists():
+                f.unlink()
+                print(f"  -> Dihapus: {f.name}")
     
     if args.channel.lower() == 'all':
         for d in CHANNELS_DIR.iterdir():
@@ -412,7 +419,6 @@ def handle_lifetime(args):
     if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{args.channel}.service"]).returncode != 0:
         handle_start(args) # Jika belum jalan, jalankan dulu
     
-    # Setelah dipastikan berjalan, hapus jadwal dan buat permanen
     handle_unschedule(args, quiet=True)
     paths["lock"].write_text(LIFETIME_TAG)
     print_info(f"Stream '{args.channel}' telah diatur ke mode LIFETIME (permanen).")
