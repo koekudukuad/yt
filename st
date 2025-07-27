@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v9 - SUDO FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v11 - MAPPING FIX)
 # ===================================================================
 
 set -e # Hentikan skrip jika ada error
@@ -44,7 +44,6 @@ rm -rf "${FFMPEG_JV_DIR}/"
 log_info "Pembersihan total selesai."
 
 # --- 3. Instal FFMPEG ---
-# (Kode FFMPEG sama seperti sebelumnya, tidak perlu diubah)
 log_info "Menginstal FFMPEG dari John Vansickle..."
 mkdir -p "${FFMPEG_JV_DIR}"
 cd /tmp
@@ -56,7 +55,6 @@ if ! /usr/bin/ffmpeg -version | grep -q "johnvansickle.com"; then log_error "Ins
 log_info "FFMPEG berhasil diinstal."
 
 # --- 4. Buat Direktori, Pengguna, dan Atur Izin Akses ---
-# (Kode ini sama seperti sebelumnya, tidak perlu diubah)
 log_info "Membuat direktori, pengguna, dan mengatur izin akses..."
 mkdir -p "${CHANNELS_BASE_DIR}"
 id -g "${SERVICE_GROUP}" &>/dev/null || groupadd "${SERVICE_GROUP}"
@@ -72,7 +70,6 @@ echo 'ytlive ALL=(ALL) NOPASSWD: /bin/systemctl start ytlive-*, /bin/systemctl s
 chmod 0440 /etc/sudoers.d/ytlive
 log_info "Aturan Sudo berhasil dibuat."
 
-
 # --- 6. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
 cat << EOF > "${WORKER_SCRIPT_PATH}"
@@ -81,8 +78,8 @@ set -e
 CHANNEL_NAME=\$1
 # Panggil Python untuk merender audio HANYA JIKA DIPERLUKAN.
 /usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_render "\$CHANNEL_NAME"
-# Jalankan (exec) FFMPEG. Perintah FFMPEG diambil dari output Python.
-exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANNEL_NAME")
+# Jalankan (exec) FFMPEG dan arahkan semua output (stdout & stderr) ke stream.log
+exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANNEL_NAME") &>> stream.log
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
 
@@ -138,13 +135,11 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v8 -> v9: Mengganti metode izin Polkit dengan Sudoers ('/etc/sudoers.d/')
-#     untuk mengatasi error 'Interactive authentication required'.
-#     Skrip Python kini memanggil 'sudo systemctl' untuk start/stop.
+# v10 -> v11: Memperbaiki logika stream mapping untuk Mode A.
+#      Sekarang menggunakan '-c:v copy -c:a copy' yang lebih robust
+#      untuk memastikan video dan audio dari file sumber ikut terkirim.
 # ===================================================================
 
-# (Sisa dari skrip Python ada di bawah, dengan perubahan pada handle_start dan handle_stop)
-# ... (kode python lengkap seperti sebelumnya)
 # ===================================================================
 # --- PUSAT KONFIGURASI ---
 # ===================================================================
@@ -230,24 +225,30 @@ def _render_audio(channel_name, paths):
     render_cmd = [FFMPEG_PATH] + input_cmds + ["-filter_complex", filter_complex, "-map", "[a]", "-c:a", "libmp3lame", "-b:a", "128k", "-y", str(paths["audio"])]
     return subprocess.run(["nice", "-n", "19"] + render_cmd, capture_output=True, text=True)
 
+# --- PERUBAHAN DI FUNGSI INI ---
 def _build_ffmpeg_command(paths, mode, force_audio_copy=False):
     if not paths["key"].is_file() or paths["key"].stat().st_size == 0: return None
     key = paths["key"].read_text().strip()
     videos = list(paths["dir"].glob("*.mp4")) + list(paths["dir"].glob("*.mkv"))
     video = videos[(datetime.now().timetuple().tm_yday - 1) % len(videos)]
-    
-    out_opts = ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+
+    # Perintah dasar
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     
+    # Opsi output umum (tanpa codec)
+    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+
     if mode == "A (Video Saja)" or not paths["audio"].is_file():
-        cmd_list.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        # Mode A: Salin video DAN audio langsung dari file sumber.
+        cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
     else:
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(paths["audio"]), "-map", "0:v:0", "-map", "1:a:0"])
+        # Mode B/C: Salin video, gunakan audio yang dirender, dan encode ulang audio ke AAC.
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(paths["audio"]), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
     
-    cmd_list.extend(out_opts)
+    cmd_list.extend(common_out_opts)
     return cmd_list
 
-# --- PERUBAHAN DI SINI ---
+
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
@@ -257,7 +258,6 @@ def handle_start(args):
     paths["lock"].write_text(LIFETIME_TAG)
     
     try:
-        # Menambahkan 'sudo' pada perintah systemctl
         subprocess.run(['sudo', 'systemctl', 'start', f"ytlive-stream@{args.channel}.service"], check=True)
         print_info(f"Streaming '{args.channel}' dimulai secara manual via Systemd.")
         if (SYSTEMD_DIR / f"ytlive-schedule-start@{args.channel}.timer").exists():
@@ -265,9 +265,7 @@ def handle_start(args):
     except subprocess.CalledProcessError:
         print_error(f"Gagal memulai service. Cek log dengan: ytlive debug {args.channel}")
 
-# --- DAN PERUBAHAN DI SINI ---
 def handle_stop(args, quiet=False):
-    # Menambahkan 'sudo' pada perintah systemctl
     subprocess.run(['sudo', 'systemctl', 'stop', f"ytlive-stream@{args.channel}.service"], check=False, capture_output=True)
     paths = _get_paths(args.channel)
     for f in [paths["lock"], paths["playlist"]]: f.unlink(missing_ok=True)
@@ -362,7 +360,10 @@ def handle_debug(args):
     service_name = f"ytlive-stream@{args.channel}.service"
     print("-" * 60); print(f"Menampilkan log Systemd (journalctl) untuk: {COLOR_CYAN}{service_name}{COLOR_RESET}")
     print("Log ini sangat penting jika status channel adalah [CRASHED]"); print("-" * 60)
-    subprocess.run(['journalctl', '-u', service_name, '-n', '50', '--no-pager'])
+    try:
+        subprocess.run(['journalctl', '-u', service_name, '-f', '--no-pager'])
+    except KeyboardInterrupt:
+        print("\nKeluar dari mode debug.")
     print("-" * 60)
 
 def _clean_single_channel(name):
@@ -522,7 +523,7 @@ def main():
     p_create = subparsers.add_parser('create', help='Buat channel baru. Contoh: ytlive create <channel>'); p_create.add_argument('channel')
     p_delete = subparsers.add_parser('delete', help='Hapus channel. Contoh: ytlive delete <channel>'); p_delete.add_argument('channel')
     p_log = subparsers.add_parser('log', help='Tampilkan log realtime. Contoh: ytlive log <channel>'); p_log.add_argument('channel')
-    p_debug = subparsers.add_parser('debug', help='Tampilkan log systemd untuk debug. Contoh: ytlive debug <channel>'); p_debug.add_argument('channel')
+    p_debug = subparsers.add_parser('debug', help='Tampilkan log realtime systemd untuk debug. Contoh: ytlive debug <channel>'); p_debug.add_argument('channel')
     p_schedule = subparsers.add_parser('schedule', help='Jadwalkan stream. Contoh: ytlive schedule <channel> 08:00 [22:00]'); p_schedule.add_argument('channel'); p_schedule.add_argument('start_time'); p_schedule.add_argument('stop_time', nargs='?', default=None)
     p_unschedule = subparsers.add_parser('unschedule', help='Hapus jadwal. Contoh: ytlive unschedule <channel>'); p_unschedule.add_argument('channel')
     p_clean = subparsers.add_parser('clean', help='Bersihkan file sementara. Contoh: ytlive clean all'); p_clean.add_argument('channel')
