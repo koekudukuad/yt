@@ -142,6 +142,7 @@ YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 MAX_BITRATE = "2500k"
 BUFFER_SIZE = "5000k"
 SERVICE_USER = "ytlive"
+SERVICE_GROUP = "ytlive" # <--- TAMBAHKAN BARIS INI
 LIFETIME_TAG = "# LIFETIME_STREAM"
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 SYSTEMD_DIR = Path("/etc/systemd/system")
