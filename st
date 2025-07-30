@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15 - COMMAND NOT FOUND FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15 - FINAL STABLE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -129,9 +129,10 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v14 -> v15: Memperbaiki bug 'command not found' (exit code 127).
-#      - Menghapus pesan 'print_info' yang salah tempat dari dalam fungsi
-#        _build_ffmpeg_command yang menyebabkan output terkontaminasi.
+# v14 -> v15: Konsolidasi perbaikan minor.
+#      - Menambahkan variabel SERVICE_GROUP dan COLOR_WARN yang hilang
+#        untuk memperbaiki 'NameError' pada perintah 'create' dan 'delete'.
+#      - Memastikan semua fitur sebelumnya tetap berfungsi.
 # ===================================================================
 
 # ===================================================================
@@ -142,17 +143,25 @@ YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 MAX_BITRATE = "2500k"
 BUFFER_SIZE = "5000k"
 SERVICE_USER = "ytlive"
-SERVICE_GROUP = "ytlive" # <--- TAMBAHKAN BARIS INI
+SERVICE_GROUP = "ytlive" # Ditambahkan untuk fix NameError
 LIFETIME_TAG = "# LIFETIME_STREAM"
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 SYSTEMD_DIR = Path("/etc/systemd/system")
 # ===================================================================
 
 # --- Kode Warna ---
-COLOR_RESET, COLOR_INFO, COLOR_ERROR, COLOR_CYAN, COLOR_STATUS_RUNNING, COLOR_STATUS_STOPPED, COLOR_STATUS_CRASH = "\033[0m", "\033[0;32m", "\033[0;31m", "\033[0;36m", "\033[0;32m", "\033[0;33m", "\033[0;31m"
+COLOR_RESET = "\033[0m"
+COLOR_INFO = "\033[0;32m"
+COLOR_WARN = "\033[0;33m" # Ditambahkan untuk fix NameError
+COLOR_ERROR = "\033[0;31m"
+COLOR_CYAN = "\033[0;36m"
+COLOR_STATUS_RUNNING = COLOR_INFO
+COLOR_STATUS_STOPPED = COLOR_WARN
+COLOR_STATUS_CRASH = COLOR_ERROR
+# ===================================================================
 
 def print_info(message): print(f"{COLOR_INFO}[INFO]{COLOR_RESET} {message}")
-def print_warn(message): print(f"\033[33m[PERINGATAN]{COLOR_RESET} {message}")
+def print_warn(message): print(f"{COLOR_WARN}[PERINGATAN]{COLOR_RESET} {message}")
 def print_error(message): print(f"{COLOR_ERROR}[ERROR]{COLOR_RESET} {message}")
 
 def _get_paths(channel_name):
@@ -190,9 +199,6 @@ def _build_ffmpeg_command(paths, mode):
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
-        
-        # PERBAIKAN: Baris print_info di bawah ini telah dihapus.
-        
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
                          "-map", "0:v:0", "-map", "1:a:0", 
                          "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
@@ -261,7 +267,6 @@ def handle_list(args):
         print(f"{ch_name:<25} {COLOR_CYAN}{mode:<28}{COLOR_RESET} {status:<20} {jadwal}")
     print("-" * 100)
 
-
 def handle_timers(args):
     print_info("Menampilkan Jadwal Timer Systemd untuk YTLive...")
     print("-" * 70)
@@ -279,7 +284,7 @@ def handle_delete(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].exists(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
     handle_stop(args, quiet=True); handle_unschedule(args, quiet=True)
-    if input(f"{COLOR_WARN}Anda yakin ingin menghapus semua file untuk '{args.channel}'? Ketik 'DELETE': {COLOR_RESET}") == "DELETE":
+    if input(f"{COLOR_WARN}Anda yakin ingin menghapus '{args.channel}'? Ketik 'DELETE': {COLOR_RESET}") == "DELETE":
         shutil.rmtree(paths["dir"]); print_info(f"Channel '{args.channel}' dihapus.")
 
 def handle_log(args):
@@ -318,18 +323,20 @@ def handle_debug(args):
         print("\nKeluar dari mode debug.")
     print("-" * 60)
 
-def _clean_single_channel(name):
+def _clean_single_channel(name, quiet=False):
     paths = _get_paths(name)
     if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{name}.service"]).returncode == 0:
-        print_warn(f"Melewatkan pembersihan '{name}' karena sedang berjalan.")
+        if not quiet: print_warn(f"Melewatkan pembersihan '{name}' karena sedang berjalan.")
         return False
-    print_info(f"Membersihkan file sementara untuk '{name}'...")
+    if not quiet: print_info(f"Membersihkan file sementara untuk '{name}'...")
     for f in [paths["log"], paths["lock"]]:
         if f.exists():
-            f.unlink(); print(f"  -> Dihapus: {f.name}")
+            f.unlink()
+            if not quiet: print(f"  -> Dihapus: {f.name}")
     return True
 
 def handle_schedule(args):
+    _clean_single_channel(args.channel)
     paths = _get_paths(args.channel)
     if "N/A" in _get_channel_mode(paths): return print_error("Mode channel tidak valid atau file media kosong.")
     try:
@@ -377,7 +384,8 @@ def handle_clean(args):
     if args.channel.lower() == 'all':
         for d in CHANNELS_DIR.iterdir():
             if d.is_dir(): _clean_single_channel(d.name)
-    else: _clean_single_channel(args.channel)
+    else:
+        _clean_single_channel(args.channel)
 
 def handle_lifetime(args):
     paths = _get_paths(args.channel)
@@ -439,6 +447,6 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Fitur rotasi audio harian telah ditambahkan."
+log_info "Semua perbaikan dan fitur baru telah diterapkan."
 log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
