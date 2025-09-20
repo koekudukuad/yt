@@ -146,13 +146,13 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v14 -> v15: Konsolidasi perbaikan minor.
-#      - Menambahkan variabel SERVICE_GROUP dan COLOR_WARN yang hilang.
 # v15 -> v16: Optimasi Kinerja & Stabilitas.
 #      - Flag '-re' pada FFMPEG dihapus untuk mengurangi overhead I/O.
 #      - Mode B kini cerdas: menggunakan '-c:a copy' jika file audio adalah
 #        .m4a (AAC), dan re-encode jika .mp3.
 #      - Installer kini otomatis membuat konfigurasi logrotate.
+#      - Memperbaiki bug 'command not found' (exit code 127) dengan menghapus
+#        pesan info yang salah tempat dari fungsi build command.
 # ===================================================================
 
 # ===================================================================
@@ -211,7 +211,7 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    # Flag '-re' dihapus dari sini
+    # Flag '-re' dihapus untuk stabilitas
     cmd_list = [FFMPEG_PATH, "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
@@ -222,12 +222,9 @@ def _build_ffmpeg_command(paths, mode):
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
         audio_opts = []
-        # Cerdas memilih codec audio
         if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
-            print_info(f"File audio {daily_audio_file.name} adalah AAC, menggunakan mode copy.")
             audio_opts = ["-c:a", "copy"]
         else:
-            print_info(f"File audio {daily_audio_file.name} bukan AAC, akan di-encode ulang.")
             audio_opts = ["-c:a", "aac", "-b:a", "128k"]
 
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
@@ -239,7 +236,6 @@ def _build_ffmpeg_command(paths, mode):
     cmd_list.extend(common_out_opts)
     return cmd_list
 
-# (Sisa dari skrip Python sama persis seperti v15, tidak perlu diubah)
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
@@ -388,6 +384,7 @@ def handle_schedule(args):
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
+
 
 def handle_unschedule(args, quiet=False):
     ch_name = args.channel
