@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v18.1 - SYNTAXERROR FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v19 - RESTORE -RE FLAG)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -146,7 +146,8 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v17 -> v18.1: Memperbaiki SyntaxError pada fungsi handle_log.
+# v18.1 -> v19: Mengembalikan flag '-re' pada perintah FFMPEG
+#         sesuai permintaan untuk pengujian.
 # ===================================================================
 
 # ===================================================================
@@ -205,7 +206,8 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    cmd_list = [FFMPEG_PATH, "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
+    # PERBAIKAN: Mengembalikan flag '-re'
+    cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     
     output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
@@ -473,5 +475,6 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
+log_info "Semua perbaikan dan fitur baru telah diterapkan."
+log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
