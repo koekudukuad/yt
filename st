@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v18 - SYNTAXERROR FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v18.1 - SYNTAXERROR FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -146,8 +146,7 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v16 -> v17: Perbaikan kritis untuk kontrol bitrate FFMPEG.
-# v17 -> v18: Memperbaiki SyntaxError pada fungsi handle_log.
+# v17 -> v18.1: Memperbaiki SyntaxError pada fungsi handle_log.
 # ===================================================================
 
 # ===================================================================
@@ -208,16 +207,11 @@ def _build_ffmpeg_command(paths, mode):
 
     cmd_list = [FFMPEG_PATH, "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     
-    output_target = [
-        "-f", "flv",
-        f"{YOUTUBE_RTMP_URL}/{key}"
-    ]
+    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     video_output_options = [
-        "-map", "0:v:0",
-        "-c:v", "copy",
-        "-maxrate", MAX_BITRATE,
-        "-bufsize", BUFFER_SIZE
+        "-map", "0:v:0", "-c:v", "copy",
+        "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE
     ]
 
     if mode == "A (Video Saja)":
@@ -242,7 +236,6 @@ def _build_ffmpeg_command(paths, mode):
         audio_output_options = ["-map", "1:a:0"] + audio_codec_options
         cmd_list.extend(video_output_options + audio_output_options + output_target)
     else:
-        print_error(f"Mode channel tidak dikenal: {mode}")
         return None
     
     return cmd_list
@@ -323,7 +316,6 @@ def handle_log(args):
     if not log_file.exists(): return print_info(f"Log file untuk '{args.channel}' tidak ditemukan.")
     print(f"-> Menampilkan log untuk '{args.channel}' (Ctrl+C untuk keluar)...")
     try:
-        # PERBAIKAN: Kode 'with' diubah ke format multi-baris yang benar
         with subprocess.Popen(['tail', '-f', str(log_file)]) as proc:
             proc.wait()
     except KeyboardInterrupt:
@@ -481,6 +473,5 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan dan fitur baru telah diterapkan."
-log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
+log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
 log_info "Selamat melakukan streaming! ✅"
