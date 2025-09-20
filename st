@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v16 - OPTIMIZATIONS)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17 - BITRATE CONTROL FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -146,13 +146,12 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v15 -> v16: Optimasi Kinerja & Stabilitas.
-#      - Flag '-re' pada FFMPEG dihapus untuk mengurangi overhead I/O.
-#      - Mode B kini cerdas: menggunakan '-c:a copy' jika file audio adalah
-#        .m4a (AAC), dan re-encode jika .mp3.
-#      - Installer kini otomatis membuat konfigurasi logrotate.
-#      - Memperbaiki bug 'command not found' (exit code 127) dengan menghapus
-#        pesan info yang salah tempat dari fungsi build command.
+# v16 -> v17: Perbaikan kritis untuk kontrol bitrate FFMPEG.
+#      - Opsi '-maxrate' dan '-bufsize' sekarang diterapkan secara eksplisit
+#        pada output video stream (bukan hanya global) untuk memastikan FFMPEG
+#        menerapkannya dengan benar, mengatasi peringatan "has not been used".
+#      - Ini diharapkan dapat menyelesaikan masalah 'Broken pipe' yang
+#        disebabkan oleh stream yang tidak stabil di mata YouTube.
 # ===================================================================
 
 # ===================================================================
@@ -211,29 +210,53 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    # Flag '-re' dihapus untuk stabilitas
+    # Input options
     cmd_list = [FFMPEG_PATH, "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+    
+    # Common output format and destination (NO VBV here)
+    output_target = [
+        "-f", "flv",
+        f"{YOUTUBE_RTMP_URL}/{key}"
+    ]
+
+    # Video output options, including VBV, applied to stream 0 (video)
+    video_output_options = [
+        "-map", "0:v:0",
+        "-c:v", "copy",
+        "-maxrate", MAX_BITRATE,
+        "-bufsize", BUFFER_SIZE
+    ]
 
     if mode == "A (Video Saja)":
-        cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
+        # Add audio copy from input 0, make it optional
+        audio_output_options = ["-map", "0:a:0?", "-c:a", "copy"] 
+        cmd_list.extend(video_output_options + audio_output_options + output_target)
+
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
+        if not audios:
+            print_error(f"Channel '{paths['dir'].name}' diatur ke Mode B tetapi tidak ada file audio.")
+            return None # Should not happen with _get_channel_mode check, but for safety
+        
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        audio_opts = []
+        audio_codec_options = []
         if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
-            audio_opts = ["-c:a", "copy"]
-        else:
-            audio_opts = ["-c:a", "aac", "-b:a", "128k"]
+            audio_codec_options = ["-c:a", "copy"]
+        else: # .mp3 or other formats
+            audio_codec_options = ["-c:a", "aac", "-b:a", "128k"]
 
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
-                         "-map", "0:v:0", "-map", "1:a:0", 
-                         "-c:v", "copy"] + audio_opts)
+        # Add input for external audio
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
+
+        # Map video from input 0, map audio from input 1, then apply options
+        audio_output_options = ["-map", "1:a:0"] + audio_codec_options
+        
+        cmd_list.extend(video_output_options + audio_output_options + output_target)
     else:
+        print_error(f"Mode channel tidak dikenal: {mode}")
         return None
     
-    cmd_list.extend(common_out_opts)
     return cmd_list
 
 def handle_start(args):
@@ -312,7 +335,7 @@ def handle_log(args):
     if not log_file.exists(): return print_info(f"Log file untuk '{args.channel}' tidak ditemukan.")
     print(f"-> Menampilkan log untuk '{args.channel}' (Ctrl+C untuk keluar)...")
     try:
-        with subprocess.Popen(['tail', '-f', str(log_file)]) as proc: proc.wait()
+        subprocess.Popen(['tail', '-f', str(log_file)]) as proc: proc.wait()
     except KeyboardInterrupt: print("\nKeluar dari mode log.")
 
 def handle_status(args):
@@ -384,7 +407,6 @@ def handle_schedule(args):
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
-
 
 def handle_unschedule(args, quiet=False):
     ch_name = args.channel
@@ -467,5 +489,6 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Optimasi telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
+log_info "Fitur rotasi audio harian telah ditambahkan."
+log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
