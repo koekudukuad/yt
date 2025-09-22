@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v21 - OPTIMIZED COPY MODE A)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v22 - USER REQUEST)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -146,13 +146,11 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v20 -> v20.1: Perbaikan kritis untuk stabilitas Mode A (Video Saja).
-#      - Mode A kini menggunakan '-c:v copy -c:a copy' dan
-#        SECARA EKSPLISIT MENGHAPUS opsi '-maxrate' dan '-bufsize'.
-#        Ini meniru perintah manual yang sukses dan mengatasi masalah
-#        'Broken pipe' yang disebabkan FFMPEG mengabaikan VBV pada stream yang di-copy.
-#      - Mode B tetap mere-encode video ke H.264 untuk stabilitas saat mixing audio.
-#      - Memperbaiki SyntaxError pada fungsi handle_log.
+# v21 -> v22: Mengembalikan logika FFMPEG sesuai permintaan pengguna.
+#      - Mode A: Kembali ke '-c:v copy -c:a copy' yang ringan, tanpa
+#        '-map' atau '-maxrate' untuk mencocokkan perintah manual.
+#      - Mode B: Kembali ke '-c:v copy' untuk video, dengan audio cerdas
+#        (copy untuk aac/m4a, re-encode untuk mp3) sesuai konfirmasi.
 # ===================================================================
 
 # ===================================================================
@@ -160,16 +158,10 @@ import re
 # ===================================================================
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
-
-# Pengaturan bitrate ini HANYA digunakan jika re-encode VIDEO dilakukan (saat ini Mode B)
-MAX_BITRATE = "2500k"  # Bitrate Video maksimal (misal: 2500k untuk 720p, 5000k untuk 1080p)
-BUFFER_SIZE = "5000k"  # Ukuran buffer VBV (biasanya 2x MAX_BITRATE)
-VIDEO_PRESET = "veryfast" # Kualitas encoding video. Pilihan: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow. Pilih 'ultrafast' atau 'superfast' untuk VPS dengan CPU terbatas.
-
-# Pengaturan audio ini HANYA digunakan jika re-encode AUDIO dilakukan (saat ini Mode B untuk MP3)
-AUDIO_BITRATE = "128k" # Bitrate Audio (misal: 128k, 192k)
-AUDIO_SAMPLE_RATE = "44100" # Sample Rate Audio (44100 atau 48000)
-
+MAX_BITRATE = "2500k"
+BUFFER_SIZE = "5000k"
+AUDIO_BITRATE = "128k"
+AUDIO_SAMPLE_RATE = "44100"
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
@@ -224,30 +216,25 @@ def _build_ffmpeg_command(paths, mode):
     output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
-        # Mode A: Copy video dan audio apa adanya, tanpa VBV (maxrate/bufsize)
-        video_copy_options = [
-            "-map", "0:v:0", "-c:v", "copy",
-        ]
-        audio_copy_options = [
-            "-map", "0:a:0?", "-c:a", "copy",
-        ] 
-        cmd_list.extend(video_copy_options + audio_copy_options + output_target)
+        # Mode A: Sederhana, meniru perintah manual yang sukses. Ringan di CPU.
+        cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
+        cmd_list.extend(output_target)
 
     elif mode == "B (Video + Audio Harian)":
+        # Mode B: Sesuai permintaan Anda, video di-copy, audio cerdas.
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
         if not audios:
-            print_error(f"Channel '{paths['dir'].name}' diatur ke Mode B tetapi tidak ada file audio.")
-            return None
+            return None # Fallback
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        # Mode B: Video di-re-encode (untuk stabilitas VBV), audio di-re-encode/copy
-        video_encoding_options = [
-            "-map", "0:v:0",
-            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-pix_fmt", "yuv420p",
-            "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE
+        # Opsi video untuk mode B
+        video_output_options = [
+            "-map", "0:v:0", "-c:v", "copy",
+            "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE # VBV untuk stabilitas
         ]
         
+        # Opsi audio cerdas
         audio_codec_options = []
         if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
             audio_codec_options = ["-c:a", "copy"]
@@ -258,12 +245,13 @@ def _build_ffmpeg_command(paths, mode):
         
         audio_output_map_options = ["-map", "1:a:0"]
         
-        cmd_list.extend(video_encoding_options + audio_output_map_options + audio_codec_options + output_target)
+        cmd_list.extend(video_output_options + audio_output_map_options + audio_codec_options + output_target)
     else:
         return None
     
     return cmd_list
 
+# Sisa dari skrip (handle_start, stop, list, dll.) sama seperti versi stabil sebelumnya.
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
@@ -342,7 +330,8 @@ def handle_log(args):
     try:
         with subprocess.Popen(['tail', '-f', str(log_file)]) as proc:
             proc.wait()
-    except KeyboardInterrupt: print("\nKeluar dari mode log.")
+    except KeyboardInterrupt:
+        print("\nKeluar dari mode log.")
 
 def handle_status(args):
     paths = _get_paths(args.channel)
