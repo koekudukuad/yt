@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v19 - RESTORE -RE FLAG)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v18.1 - FINAL STABLE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -144,7 +144,7 @@ import shutil
 import re
 
 # ===================================================================
-# --- CATATAN PERBAIKAN (CHANGELOG) ---
+# --- CATATAN PERBAAIKAN (CHANGELOG) ---
 # ===================================================================
 # v18.1 -> v19: Mengembalikan flag '-re' pada perintah FFMPEG
 #         sesuai permintaan untuk pengujian.
@@ -191,7 +191,7 @@ def _get_channel_mode(paths):
     videos = list(paths["dir"].glob("*.mp4")) + list(paths["dir"].glob("*.mkv"))
     if not videos or any(v.stat().st_size == 0 for v in videos): return "N/A (Video Kosong)"
     
-    audios = list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a"))
+    audios = list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac"))
     
     if len(audios) > 0:
         return "B (Video + Audio Harian)"
@@ -206,7 +206,6 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    # PERBAIKAN: Mengembalikan flag '-re'
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     
     output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
@@ -221,10 +220,9 @@ def _build_ffmpeg_command(paths, mode):
         cmd_list.extend(video_output_options + audio_output_options + output_target)
 
     elif mode == "B (Video + Audio Harian)":
-        audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
+        audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
         if not audios:
-            print_error(f"Channel '{paths['dir'].name}' diatur ke Mode B tetapi tidak ada file audio.")
-            return None
+            return None # Fallback, seharusnya tidak terjadi
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
@@ -320,8 +318,7 @@ def handle_log(args):
     try:
         with subprocess.Popen(['tail', '-f', str(log_file)]) as proc:
             proc.wait()
-    except KeyboardInterrupt:
-        print("\nKeluar dari mode log.")
+    except KeyboardInterrupt: print("\nKeluar dari mode log.")
 
 def handle_status(args):
     paths = _get_paths(args.channel)
