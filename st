@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v22 - USER REQUEST)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v24 - USER PREFERENCE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -27,38 +27,43 @@ apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 apt-get install -y python3 python3-pip wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
 pip3 install psutil requests || log_error "Gagal menginstal psutil/requests."
 
-# --- 2. Pembersihan Total ---
-log_info "Membersihkan instalasi sebelumnya secara total..."
-killall -9 ffmpeg &>/dev/null || true
-systemctl stop 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
-systemctl disable 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
-find /etc/systemd/system -name 'ytlive-*' -delete
+# --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
+log_info "Memperbarui komponen skrip (jadwal dan stream aktif akan tetap aman)..."
+# Hapus hanya file-file yang akan dibuat ulang oleh installer ini.
+# JANGAN sentuh timer (.timer) atau service yang sedang berjalan.
+rm -f /etc/systemd/system/ytlive-stream@.service
+rm -f /etc/systemd/system/ytlive-schedule-start@.service
+rm -f /etc/systemd/system/ytlive-schedule-stop@.service
 rm -f /etc/sudoers.d/ytlive
 rm -f /etc/logrotate.d/ytlive
-systemctl daemon-reload
-rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}" /usr/bin/ffmpeg /usr/bin/ffprobe
-rm -rf "${FFMPEG_JV_DIR}/"
-(crontab -u ${SERVICE_USER} -r &>/dev/null) || true
-log_info "Pembersihan total selesai."
+rm -f "${PYTHON_SCRIPT_PATH}"
+rm -f "${WORKER_SCRIPT_PATH}"
+log_info "Komponen lama berhasil dihapus, siap untuk diperbarui."
+
 
 # --- 3. Instal FFMPEG ---
-log_info "Menginstal FFMPEG..."
-mkdir -p "${FFMPEG_JV_DIR}"
-cd /tmp
-wget -q --show-progress "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-tar -xf ffmpeg-release-amd64-static.tar.xz -C "${FFMPEG_JV_DIR}" --strip-components=1
-ln -sf "${FFMPEG_JV_DIR}/ffmpeg" /usr/bin/ffmpeg
-ln -sf "${FFMPEG_JV_DIR}/ffprobe" /usr/bin/ffprobe
-log_info "FFMPEG berhasil diinstal."
+if [ ! -f "/usr/bin/ffmpeg" ]; then
+    log_info "FFMPEG tidak ditemukan, menginstal FFMPEG..."
+    mkdir -p "${FFMPEG_JV_DIR}"
+    cd /tmp
+    wget -q --show-progress "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+    tar -xf ffmpeg-release-amd64-static.tar.xz -C "${FFMPEG_JV_DIR}" --strip-components=1
+    ln -sf "${FFMPEG_JV_DIR}/ffmpeg" /usr/bin/ffmpeg
+    ln -sf "${FFMPEG_JV_DIR}/ffprobe" /usr/bin/ffprobe
+    log_info "FFMPEG berhasil diinstal."
+else
+    log_info "FFMPEG sudah ada, instalasi dilewati."
+fi
+
 
 # --- 4. Buat Direktori & Pengguna ---
-log_info "Membuat direktori, pengguna, dan izin akses..."
+log_info "Memeriksa direktori, pengguna, dan izin akses..."
 mkdir -p "${CHANNELS_BASE_DIR}"
 id -g "${SERVICE_GROUP}" &>/dev/null || groupadd "${SERVICE_GROUP}"
 id -u "${SERVICE_USER}" &>/dev/null || useradd -r -s /bin/false -g "${SERVICE_GROUP}" "${SERVICE_USER}"
 chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${CHANNELS_BASE_DIR}"
-setfacl -m u:${SERVICE_USER}:x /root
-setfacl -m u:${SERVICE_USER}:x /root/data
+setfacl -m u:${SERVICE_USER}:x /root &>/dev/null || true
+setfacl -m u:${SERVICE_USER}:x /root/data &>/dev/null || true
 log_info "Direktori dan izin akses berhasil dikonfigurasi."
 
 # --- 5. Buat Aturan Izin Sudo ---
@@ -146,11 +151,10 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v21 -> v22: Mengembalikan logika FFMPEG sesuai permintaan pengguna.
-#      - Mode A: Kembali ke '-c:v copy -c:a copy' yang ringan, tanpa
-#        '-map' atau '-maxrate' untuk mencocokkan perintah manual.
-#      - Mode B: Kembali ke '-c:v copy' untuk video, dengan audio cerdas
-#        (copy untuk aac/m4a, re-encode untuk mp3) sesuai konfirmasi.
+# v22 -> v24: Mengembalikan logika FFMPEG ke versi stabil sebelumnya
+#      sesuai permintaan pengguna, dan membuat installer menjadi non-destruktif.
+#      - Mode A & B sekarang selalu menggunakan '-c:v copy' untuk video.
+#      - Installer tidak lagi menghapus jadwal/timer.
 # ===================================================================
 
 # ===================================================================
@@ -161,7 +165,6 @@ YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 MAX_BITRATE = "2500k"
 BUFFER_SIZE = "5000k"
 AUDIO_BITRATE = "128k"
-AUDIO_SAMPLE_RATE = "44100"
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
@@ -212,46 +215,33 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    
-    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
+    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
-        # Mode A: Sederhana, meniru perintah manual yang sukses. Ringan di CPU.
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
-        cmd_list.extend(output_target)
+        cmd_list.extend(common_out_opts)
 
     elif mode == "B (Video + Audio Harian)":
-        # Mode B: Sesuai permintaan Anda, video di-copy, audio cerdas.
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
-        if not audios:
-            return None # Fallback
+        if not audios: return None
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        # Opsi video untuk mode B
-        video_output_options = [
-            "-map", "0:v:0", "-c:v", "copy",
-            "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE # VBV untuk stabilitas
-        ]
-        
-        # Opsi audio cerdas
         audio_codec_options = []
         if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
             audio_codec_options = ["-c:a", "copy"]
         else: # .mp3
-            audio_codec_options = ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE]
+            audio_codec_options = ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
 
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)]) # Input audio eksternal
-        
-        audio_output_map_options = ["-map", "1:a:0"]
-        
-        cmd_list.extend(video_output_options + audio_output_map_options + audio_codec_options + output_target)
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
+                         "-map", "0:v:0", "-map", "1:a:0", 
+                         "-c:v", "copy"] + audio_codec_options)
+        cmd_list.extend(common_out_opts)
     else:
         return None
     
     return cmd_list
 
-# Sisa dari skrip (handle_start, stop, list, dll.) sama seperti versi stabil sebelumnya.
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
