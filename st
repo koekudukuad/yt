@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v34 - FINAL STABLE)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15 - FINAL STABLE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -24,44 +24,38 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-# Menggunakan apt untuk psutil & requests agar kompatibel dengan Debian 12
-apt-get install -y python3 python3-pip python3-psutil python3-requests wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
+apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 || log_error "Gagal menginstal dependensi."
+pip3 install --upgrade pip >/dev/null || log_warn "Gagal memperbarui pip."
+pip3 install psutil requests --no-cache-dir || log_error "Gagal menginstal psutil/requests."
 
-# --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
-log_info "Memperbarui komponen skrip (jadwal dan stream aktif akan tetap aman)..."
-rm -f /etc/systemd/system/ytlive-stream@.service
-rm -f /etc/systemd/system/ytlive-schedule-start@.service
-rm -f /etc/systemd/system/ytlive-schedule-stop@.service
+# --- 2. Pembersihan Total ---
+log_info "Membersihkan instalasi sebelumnya secara total..."
+killall -9 ffmpeg &>/dev/null || true
+systemctl stop 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
+systemctl disable 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
+find /etc/systemd/system -name 'ytlive-*' -delete
 rm -f /etc/sudoers.d/ytlive
-rm -f /etc/logrotate.d/ytlive
-rm -f "${PYTHON_SCRIPT_PATH}"
-rm -f "${WORKER_SCRIPT_PATH}"
-log_info "Komponen lama berhasil dihapus, siap untuk diperbarui."
-
+systemctl daemon-reload
+rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}" /usr/bin/ffmpeg /usr/bin/ffprobe
+rm -rf "${FFMPEG_JV_DIR}/"
+(crontab -u ${SERVICE_USER} -r &>/dev/null) || true
+log_info "Pembersihan total selesai."
 
 # --- 3. Instal FFMPEG ---
-if [ ! -f "/usr/bin/ffmpeg" ]; then
-    log_info "FFMPEG tidak ditemukan, menginstal FFMPEG..."
-    mkdir -p "${FFMPEG_JV_DIR}"
-    cd /tmp
-    wget -q --show-progress "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-    tar -xf ffmpeg-release-amd64-static.tar.xz -C "${FFMPEG_JV_DIR}" --strip-components=1
-    ln -sf "${FFMPEG_JV_DIR}/ffmpeg" /usr/bin/ffmpeg
-    ln -sf "${FFMPEG_JV_DIR}/ffprobe" /usr/bin/ffprobe
-    log_info "FFMPEG berhasil diinstal."
-else
-    log_info "FFMPEG sudah ada, instalasi dilewati."
-fi
-
+log_info "Menginstal FFMPEG..."
+apt-get install -y ffmpeg || log_error "Gagal menginstal FFMPEG dari repositori."
+ln -sf /usr/bin/ffmpeg /usr/bin/ffmpeg
+ln -sf /usr/bin/ffprobe /usr/bin/ffprobe
+log_info "FFMPEG berhasil diinstal."
 
 # --- 4. Buat Direktori & Pengguna ---
-log_info "Memeriksa direktori, pengguna, dan izin akses..."
+log_info "Membuat direktori, pengguna, dan izin akses..."
 mkdir -p "${CHANNELS_BASE_DIR}"
 id -g "${SERVICE_GROUP}" &>/dev/null || groupadd "${SERVICE_GROUP}"
 id -u "${SERVICE_USER}" &>/dev/null || useradd -r -s /bin/false -g "${SERVICE_GROUP}" "${SERVICE_USER}"
 chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${CHANNELS_BASE_DIR}"
-setfacl -m u:${SERVICE_USER}:x /root &>/dev/null || true
-setfacl -m u:${SERVICE_USER}:x /root/data &>/dev/null || true
+setfacl -m u:${SERVICE_USER}:x /root
+setfacl -m u:${SERVICE_USER}:x /root/data
 log_info "Direktori dan izin akses berhasil dikonfigurasi."
 
 # --- 5. Buat Aturan Izin Sudo ---
@@ -70,33 +64,18 @@ echo 'ytlive ALL=(ALL) NOPASSWD: /bin/systemctl start ytlive-*, /bin/systemctl s
 chmod 0440 /etc/sudoers.d/ytlive
 log_info "Aturan Sudo berhasil dibuat."
 
-# --- 6. Konfigurasi Log Rotation ---
-log_info "Mengkonfigurasi rotasi log otomatis..."
-cat << EOF > "/etc/logrotate.d/ytlive"
-/root/data/channels/*/stream.log {
-    daily
-    rotate 7
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-}
-EOF
-log_info "Logrotate untuk ytlive berhasil dikonfigurasi."
-
-
-# --- 7. Buat Skrip Pekerja (Bash Worker) ---
+# --- 6. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
 cat << EOF > "${WORKER_SCRIPT_PATH}"
 #!/bin/bash
 set -e
 CHANNEL_NAME=\$1
+# Jalankan (exec) FFMPEG. Perintah FFMPEG diambil dari output Python.
 exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANNEL_NAME") &>> stream.log
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
 
-# --- 8. Buat Template Service Systemd ---
+# --- 7. Buat Template Service Systemd ---
 log_info "Membuat template service Systemd..."
 cat << EOF > "/etc/systemd/system/ytlive-stream@.service"
 [Unit]
@@ -129,7 +108,7 @@ ExecStart=${PYTHON_SCRIPT_PATH} stop %i
 EOF
 systemctl daemon-reload
 
-# --- 9. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
+# --- 8. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
@@ -148,16 +127,10 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v26 -> v34 (Final): Perbaikan konflik FFMPEG di Debian 12 dan
-#      mengimplementasikan preferensi pengguna secara tepat.
-#      - Dependensi Python diinstal via 'apt' untuk kompatibilitas Debian 12.
-#      - Mode A & B kini menggunakan '-c:v copy' untuk video.
-#      - Opsi '-maxrate' dan '-bufsize' DIHAPUS dari semua mode karena
-#        konflik dengan '-c:v copy' dan menyebabkan crash di Debian 12,
-#        dan tidak ada di perintah manual yang berhasil.
-#      - Mode B: Video di-copy, audio eksternal di-re-encode ke AAC dan
-#        di-resample ke 44100 Hz. Audio bawaan video diabaikan.
-#      - Installer non-destruktif untuk jadwal dan stream aktif.
+# v14 -> v15: Konsolidasi perbaikan minor.
+#       - Menambahkan variabel SERVICE_GROUP dan COLOR_WARN yang hilang
+#         untuk memperbaiki 'NameError' pada perintah 'create' dan 'delete'.
+#       - Memastikan semua fitur sebelumnya tetap berfungsi.
 # ===================================================================
 
 # ===================================================================
@@ -165,11 +138,10 @@ import re
 # ===================================================================
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
-# MAX_BITRATE dan BUFFER_SIZE dihapus dari sini karena tidak digunakan lagi dengan -c:v copy
-AUDIO_BITRATE = "128k"
-AUDIO_SAMPLE_RATE = "44100" 
+MAX_BITRATE = "2500k"
+BUFFER_SIZE = "5000k"
 SERVICE_USER = "ytlive"
-SERVICE_GROUP = "ytlive"
+SERVICE_GROUP = "ytlive" # Ditambahkan untuk fix NameError
 LIFETIME_TAG = "# LIFETIME_STREAM"
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -178,7 +150,7 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 # --- Kode Warna ---
 COLOR_RESET = "\033[0m"
 COLOR_INFO = "\033[0;32m"
-COLOR_WARN = "\033[0;33m"
+COLOR_WARN = "\033[0;33m" # Ditambahkan untuk fix NameError
 COLOR_ERROR = "\033[0;31m"
 COLOR_CYAN = "\033[0;36m"
 COLOR_STATUS_RUNNING = COLOR_INFO
@@ -202,7 +174,7 @@ def _get_channel_mode(paths):
     videos = list(paths["dir"].glob("*.mp4")) + list(paths["dir"].glob("*.mkv"))
     if not videos or any(v.stat().st_size == 0 for v in videos): return "N/A (Video Kosong)"
     
-    audios = list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac"))
+    audios = list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a"))
     
     if len(audios) > 0:
         return "B (Video + Audio Harian)"
@@ -218,36 +190,20 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    # PERBAIKAN: -maxrate dan -bufsize dihapus dari sini (common_out_opts)
-    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
+    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
-        cmd_list.extend(output_target)
-
     elif mode == "B (Video + Audio Harian)":
-        audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
-        if not audios: return None
-        
+        audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
-        
-        # PERBAIKAN: Tambahkan '-an' setelah input video (-i str(video)) untuk mengabaikan audio bawaan video
-        # Input video sudah ditambahkan di awal cmd_list. Tambahkan '-an' di sini.
-        # Kemudian tambahkan input audio eksternal
-        cmd_list.extend(["-an", "-stream_loop", "-1", "-i", str(daily_audio_file)])
-        
-        # Opsi output video dan audio yang sudah dimodifikasi
-        final_options = [
-            "-map", "0:v:0",      # Ambil video dari input 0 (file video)
-            "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
-            "-c:v", "copy",       # Video tetap di-copy
-            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE # Audio di-encode/resample
-        ]
-        
-        cmd_list.extend(final_options + output_target)
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
+                         "-map", "0:v:0", "-map", "1:a:0", 
+                         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
     else:
         return None
     
+    cmd_list.extend(common_out_opts)
     return cmd_list
 
 def handle_start(args):
@@ -255,7 +211,9 @@ def handle_start(args):
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
     if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{args.channel}.service"]).returncode == 0:
         return print_warn(f"Service untuk '{args.channel}' sudah berjalan.")
+    
     paths["lock"].write_text(LIFETIME_TAG)
+    
     try:
         subprocess.run(['sudo', 'systemctl', 'start', f"ytlive-stream@{args.channel}.service"], check=True)
         print_info(f"Streaming '{args.channel}' dimulai via Systemd.")
@@ -274,20 +232,25 @@ def handle_list(args):
     print(f"{'NAMA CHANNEL':<25} {'MODE':<28} {'STATUS':<20} {'JADWAL'}")
     print("-" * 100)
     if not CHANNELS_DIR.is_dir(): return
+    
     timers_output = subprocess.run(['systemctl', 'list-timers', 'ytlive-schedule-*', '--no-legend', '--all'], capture_output=True, text=True).stdout
     timers = [line.split() for line in timers_output.splitlines() if 'ytlive-schedule' in line]
+    
     for channel_dir in sorted(CHANNELS_DIR.iterdir()):
         if not channel_dir.is_dir(): continue
         ch_name, paths = channel_dir.name, _get_paths(channel_dir.name)
         mode = _get_channel_mode(paths)
         status, jadwal = f"{COLOR_STATUS_STOPPED}[ STOPPED ]{COLOR_RESET}", "Manual"
+        
         start_timer = next((t for t in timers if f"ytlive-schedule-start@{ch_name}.timer" in t), None)
         stop_timer = next((t for t in timers if f"ytlive-schedule-stop@{ch_name}.timer" in t), None)
         is_scheduled = start_timer and stop_timer
+
         if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{ch_name}.service"]).returncode == 0:
             status = f"{COLOR_STATUS_RUNNING}[ RUNNING ]{COLOR_RESET}"
         elif paths['lock'].exists() and not is_scheduled:
              status = f"{COLOR_STATUS_CRASH}[  CRASH  ]{COLOR_RESET}"
+        
         if is_scheduled:
             try:
                 start_time_str = start_timer[2]; stop_time_str = stop_timer[2]
@@ -298,6 +261,7 @@ def handle_list(args):
                 jadwal = "Terjadwal (Error Parsing)"
         elif paths["lock"].exists():
             jadwal = "Manual/Lifetime"
+
         print(f"{ch_name:<25} {COLOR_CYAN}{mode:<28}{COLOR_RESET} {status:<20} {jadwal}")
     print("-" * 100)
 
@@ -326,8 +290,7 @@ def handle_log(args):
     if not log_file.exists(): return print_info(f"Log file untuk '{args.channel}' tidak ditemukan.")
     print(f"-> Menampilkan log untuk '{args.channel}' (Ctrl+C untuk keluar)...")
     try:
-        with subprocess.Popen(['tail', '-f', str(log_file)]) as proc:
-            proc.wait()
+        with subprocess.Popen(['tail', '-f', str(log_file)]) as proc: proc.wait()
     except KeyboardInterrupt: print("\nKeluar dari mode log.")
 
 def handle_status(args):
@@ -373,7 +336,7 @@ def _clean_single_channel(name, quiet=False):
 def handle_schedule(args):
     _clean_single_channel(args.channel)
     paths = _get_paths(args.channel)
-    if "N/A" in _get_channel_mode(paths): return print_error(f"Mode channel tidak valid atau file media kosong. Mode terdeteksi: '{_get_channel_mode(paths)}'")
+    if "N/A" in _get_channel_mode(paths): return print_error("Mode channel tidak valid atau file media kosong.")
     try:
         start_dt = datetime.strptime(args.start_time, '%H:%M')
         if args.stop_time:
@@ -399,6 +362,7 @@ def handle_schedule(args):
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
+
 
 def handle_unschedule(args, quiet=False):
     ch_name = args.channel
@@ -479,7 +443,8 @@ chmod +x "${PYTHON_SCRIPT_PATH}" || { log_error "Gagal membuat skrip Python dapa
 log_info "Skrip Python berhasil ditempatkan."
 
 log_info "==================================================="
-log_info "        YTLIVE STREAMER SETUP COMPLETE!"
+log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
+log_info "Semua perbaikan dan fitur baru telah diterapkan."
+log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
