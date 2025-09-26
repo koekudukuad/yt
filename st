@@ -32,16 +32,14 @@ apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
 # --- 2. Instalasi FFmpeg JVS Static Build (Non-Disruptive) ---
-# Skrip ini akan menghapus FFmpeg lama dari /usr/local/bin (tempat JVS berada) dan menginstal v6.0.1.
-# Service streaming yang sedang berjalan akan tetap menggunakan FFmpeg yang sudah dimuat ke memori sampai di-restart.
-
+# Mengganti FFmpeg lama (APT atau JVS v7) dengan v6.0.1 yang stabil.
 log_info "Memeriksa dan menginstal FFmpeg JVS v6.0.1 AMD64 yang stabil..."
 
-# 2a. Hapus FFmpeg lama (baik JVS lain atau build manual) dari /usr/local/bin
+# 2a. Hapus FFmpeg lama (JVS lain atau build manual) dari /usr/local/bin
 log_info "Menghapus FFmpeg lama dan file terkait dari ${FFMPEG_TARGET_PATH}..."
 rm -f "${FFMPEG_BINARY_PATH}" "${FFMPEG_TARGET_PATH}/ffprobe" || true
 
-# 2b. Hapus FFmpeg dari APT/Debian agar tidak ada konflik (jika terinstal)
+# 2b. Hapus FFmpeg dari APT/Debian agar tidak ada konflik
 log_info "Menghapus FFmpeg dari APT (repositori resmi) untuk menghindari konflik..."
 apt-get purge -y ffmpeg &>/dev/null || true
 
@@ -181,7 +179,7 @@ BUFFER_SIZE = "5000k"
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
-# PASTIKAN PATH INI SESUAI DENGAN INSTALASI JVS DI BAGIAN 2
+# FFMPEG PATH DITETAPKAN KE LOKASI JVS STATIC BUILD
 FFMPEG_PATH = "/usr/local/bin/ffmpeg" 
 SYSTEMD_DIR = Path("/etc/systemd/system")
 # ===================================================================
@@ -228,7 +226,6 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    # Panggil FFMPEG menggunakan FFMPEG_PATH yang sudah dikonfigurasi (/usr/local/bin/ffmpeg)
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
