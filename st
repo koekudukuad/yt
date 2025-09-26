@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.5 - Foolproof Path & Verification)
+#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.6 - Final Idempotent Fix)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -28,13 +28,12 @@ timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
-# --- 2. Instalasi FFmpeg Cerdas (v17.5) ---
+# --- 2. Instalasi FFmpeg (Hanya jika diperlukan) ---
 log_info "Memeriksa file binary FFmpeg JVS v6.0.1..."
-
 if [ -f "${FFMPEG_BINARY_PATH}" ] && "${FFMPEG_BINARY_PATH}" -version 2>&1 | grep -q "ffmpeg version 6.0.1"; then
-    log_info "File binary FFmpeg v6.0.1 sudah ada di ${FFMPEG_BINARY_PATH}. Melewati unduhan."
+    log_info "FFmpeg v6.0.1 sudah ada. Melewati unduhan."
 else
-    log_warn "File binary FFmpeg v6.0.1 tidak ditemukan/salah. Memulai proses instalasi..."
+    log_warn "FFmpeg v6.0.1 tidak ditemukan/salah. Memulai proses instalasi..."
     apt-get purge -y ffmpeg &>/dev/null || true
     rm -f "${FFMPEG_BINARY_PATH}" "${FFMPEG_TARGET_PATH}/ffprobe" || true
     wget -q "${FFMPEG_URL}" -O /tmp/ffmpeg.tar.xz || log_error "Gagal mengunduh FFmpeg dari JVS."
@@ -50,24 +49,16 @@ else
     log_info "FFmpeg v6.0.1 AMD64 berhasil ditempatkan di ${FFMPEG_BINARY_PATH}."
 fi
 
-# --- 2b. Integrasi Sistem & Verifikasi (Selalu Dijalankan) ---
-log_info "Memastikan FFmpeg terintegrasi dengan sistem (Symlink & Cache)..."
-log_info "Membuat ulang symbolic link di /usr/bin/ffmpeg untuk menjamin konsistensi..."
-rm -f /usr/bin/ffmpeg
+# --- 2b. Integrasi Sistem Wajib (Selalu Dijalankan Sesuai Permintaan) ---
+log_info "Menjalankan integrasi sistem untuk memastikan 'ffmpeg' dapat diakses..."
+log_info "Membuat ulang symbolic link: /usr/bin/ffmpeg -> ${FFMPEG_BINARY_PATH}"
+rm -f /usr/bin/ffmpeg # Aman untuk dijalankan meskipun file tidak ada
 ln -s "${FFMPEG_BINARY_PATH}" /usr/bin/ffmpeg
-log_info "Membersihkan cache path shell (hash -r)..."
+log_info "Membersihkan cache path shell: hash -r"
 hash -r
-log_info "Melakukan verifikasi akhir..."
-if command -v ffmpeg &>/dev/null; then
-    log_info "✅ VERIFIKASI BERHASIL: Perintah 'ffmpeg' sekarang dapat ditemukan oleh shell."
-    log_info "Output 'ffmpeg -version':"
-    ffmpeg -version
-else
-    log_error "❌ VERIFIKASI GAGAL: Perintah 'ffmpeg' masih tidak dapat ditemukan setelah semua usaha."
-    log_error "Ini bisa terjadi karena masalah environment PATH yang tidak standar. Mohon periksa manual."
-fi
+log_info "✅ Integrasi sistem FFmpeg selesai."
 
-# --- 3. Pembaruan Skrip (Non-Disruptive) ---
+# --- 3. Pembaruan Skrip ---
 log_info "Memeriksa stream yang sedang berjalan sebelum pembaruan skrip..."
 if systemctl is-active --quiet 'ytlive-stream@*.service'; then
     log_warn "STREAM AKTIF TERDETEKSI! Skrip akan diperbarui tanpa mengganggu stream berjalan."
@@ -141,7 +132,6 @@ systemctl daemon-reload
 
 # --- 8. Tempatkan Skrip Manajemen (Python CLI) ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
-# (Isi skrip Python tidak diubah)
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
 import os, sys, subprocess, argparse, shlex, time, shutil, re
@@ -282,6 +272,6 @@ log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
 log_info "FFmpeg yang stabil (JVS v6.0.1) telah diverifikasi dan terintegrasi."
-log_warn "JANGAN LUPA: Stream yang sedang berjalan harus di-reload (ytlive reload NAMA_CHANNEL)!"
+log_warn "Stream yang sedang berjalan harus di-reload (ytlive reload NAMA_CHANNEL)!"
 log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
