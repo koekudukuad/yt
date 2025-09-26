@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#            SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.2 - JVS 6.0.1)
+#            SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.2 - JVS 6.0.1 FIXED)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -28,11 +28,10 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-# Instal dependensi dasar. Tidak perlu menginstal ffmpeg dari apt.
+# Instal dependensi dasar.
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
 # --- 2. Instalasi FFmpeg JVS Static Build (Non-Disruptive) ---
-# Mengganti FFmpeg lama (APT atau JVS v7) dengan v6.0.1 yang stabil.
 log_info "Memeriksa dan menginstal FFmpeg JVS v6.0.1 AMD64 yang stabil..."
 
 # 2a. Hapus FFmpeg lama (JVS lain atau build manual) dari /usr/local/bin
@@ -495,7 +494,7 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "FFmpeg berhasil diperbarui ke **JVS v6.0.1 (AMD64)** yang stabil."
-log_info "Stream yang sedang berjalan TIDAK dihentikan. Gunakan 'ytlive reload NAMA_CHANNEL' untuk mengaplikasikan FFmpeg baru."
+log_info "FFmpeg telah diperbarui ke **JVS v6.0.1 (AMD64)** yang stabil."
+log_warn "JANGAN LUPA: Stream yang sedang berjalan harus di-reload untuk menggunakan FFmpeg yang baru!"
 log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
