@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v31 - FINAL MODE B FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v32 - FINAL MODE B FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -213,6 +213,7 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     # Input options - -re tetap ada untuk real-time input
+    # Video input pertama, dengan '-an' untuk mengabaikan audio bawaan
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
     
     output_target = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
@@ -227,7 +228,7 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        # PERBAIKAN: Tambahkan '-an' setelah input video untuk mengabaikan audio bawaan video
+        # PERBAIKAN: Tambahkan '-an' setelah input video (-i str(video)) untuk mengabaikan audio bawaan video
         # Input video sudah ditambahkan di awal cmd_list. Tambahkan '-an' di sini.
         # Kemudian tambahkan input audio eksternal
         cmd_list.extend(["-an", "-stream_loop", "-1", "-i", str(daily_audio_file)])
