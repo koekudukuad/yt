@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v29 - MODE B SEGV FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v30 - FINAL FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -144,11 +144,9 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v28 -> v29: Memperbaiki crash FFMPEG (SEGV) di Mode B secara definitif.
-#      - Penyebabnya adalah konflik antara audio track (bisu) di file video
-#        dengan file audio eksternal.
-#      - Solusi: Menambahkan '-map -0:a' untuk secara eksplisit MENGABAIKAN
-#        semua audio track dari file video, dan hanya memakai audio eksternal.
+# v29 -> v30: Memperbaiki crash di Mode B dengan menghapus '-map -0:a'
+#      yang tidak valid, sesuai analisis dan saran pengguna. Pemetaan
+#      kini secara eksplisit hanya memilih stream yang diinginkan.
 # ===================================================================
 
 # ===================================================================
@@ -222,11 +220,9 @@ def _build_ffmpeg_command(paths, mode):
         
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
         
-        # PERBAIKAN: Abaikan audio dari video (-map -0:a), dan selalu re-encode audio eksternal
-        # Ini adalah cara paling stabil untuk menghindari crash SEGV
+        # PERBAIKAN: Menghapus '-map -0:a' yang bermasalah.
         final_options = [
             "-map", "0:v:0",      # Ambil video dari input 0 (file video)
-            "-map", "-0:a",       # Abaikan SEMUA audio dari input 0 (file video)
             "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE
@@ -238,7 +234,6 @@ def _build_ffmpeg_command(paths, mode):
     
     return cmd_list
 
-# (Sisa dari skrip Python (handle_start, stop, list, dll) tidak diubah)
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
