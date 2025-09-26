@@ -24,9 +24,7 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 || log_error "Gagal menginstal dependensi."
-pip3 install --upgrade pip >/dev/null || log_warn "Gagal memperbarui pip."
-pip3 install psutil requests --no-cache-dir || log_error "Gagal menginstal psutil/requests."
+apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi."
 
 # --- 2. Pembersihan Total ---
 log_info "Membersihkan instalasi sebelumnya secara total..."
