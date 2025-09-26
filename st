@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.0 - SMART INSTALLER)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.1 - RELOAD COMMAND)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -26,7 +26,7 @@ apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 # ffmpeg diinstal secara kondisional nanti
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
-# --- 2. Instalasi FFmpeg Cerdas --- # <-- CEK DI SINI
+# --- 2. Instalasi FFmpeg Cerdas ---
 if ! command -v ffmpeg &> /dev/null; then
     log_info "FFmpeg tidak ditemukan, menginstal..."
     apt-get install -y ffmpeg || log_error "Gagal menginstal FFmpeg."
@@ -35,23 +35,20 @@ else
     log_info "FFmpeg sudah terinstal, instalasi dilewati."
 fi
 
-# --- 3. Pembaruan Skrip (Non-Disruptive) --- # <-- CEK DI SINI
+# --- 3. Pembaruan Skrip (Non-Disruptive) ---
 log_info "Memeriksa stream yang sedang berjalan sebelum pembaruan..."
-# Cek apakah ada service ytlive yang aktif
 if systemctl is-active --quiet 'ytlive-stream@*.service'; then
     log_warn "STREAM AKTIF TERDETEKSI!"
     log_warn "Skrip tidak akan menghentikan stream yang sedang berjalan."
-    log_warn "Perubahan akan berlaku setelah stream tersebut Anda restart secara manual (ytlive stop/start)."
+    log_warn "Perubahan akan berlaku setelah stream tersebut Anda restart secara manual (ytlive reload NAMA_CHANNEL)."
 else
     log_info "Tidak ada stream aktif. Melakukan pembersihan standar."
-    # Aman untuk stop karena tidak ada yang aktif
     systemctl stop 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
 fi
 
 log_info "Menonaktifkan service dan timer lama untuk persiapan pembaruan..."
 systemctl disable 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
 
-# Hanya hapus file template service, bukan timer yang sudah dibuat
 rm -f /etc/systemd/system/ytlive-stream@.service
 rm -f /etc/systemd/system/ytlive-schedule-start@.service
 rm -f /etc/systemd/system/ytlive-schedule-stop@.service
@@ -84,7 +81,6 @@ cat << EOF > "${WORKER_SCRIPT_PATH}"
 #!/bin/bash
 set -e
 CHANNEL_NAME=\$1
-# Jalankan (exec) FFMPEG. Perintah FFMPEG diambil dari output Python.
 exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANNEL_NAME") &>> stream.log
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
@@ -141,9 +137,9 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v16.0 -> v17.0: Smart Installer & Non-Disruptive Update
-#          - Installer kini mengecek jika FFmpeg sudah ada.
-#          - Installer tidak akan menghentikan stream yang sedang berjalan.
+# v17.0 -> v17.1: Menambahkan perintah 'reload'
+#          - Perintah 'ytlive reload <channel>' kini tersedia sebagai
+#            jalan pintas untuk 'stop' lalu 'start'.
 # ===================================================================
 
 # ===================================================================
@@ -240,6 +236,13 @@ def handle_stop(args, quiet=False):
     paths = _get_paths(args.channel)
     paths["lock"].unlink(missing_ok=True)
     if not quiet: print_info(f"Stream '{args.channel}' dihentikan.")
+
+# <-- FUNGSI BARU DI SINI
+def handle_reload(args):
+    print_info(f"Memuat ulang (reload) stream untuk '{args.channel}'...")
+    handle_stop(args, quiet=True)
+    time.sleep(2) # Beri jeda 2 detik agar service benar-benar berhenti
+    handle_start(args)
 
 def handle_list(args):
     print(f"{'NAMA CHANNEL':<25} {'MODE':<28} {'STATUS':<20} {'JADWAL'}")
@@ -417,7 +420,9 @@ def _internal_get_ffmpeg_cmd(args):
 def main():
     parser = argparse.ArgumentParser(description="YTLive Streamer", formatter_class=argparse.RawTextHelpFormatter)
     subparsers = parser.add_subparsers(dest='command'); subparsers.required = True
-    handler_map = {'start': handle_start, 'stop': handle_stop, 'list': handle_list, 'status': handle_status, 'create': handle_create, 'delete': handle_delete, 'log': handle_log, 'schedule': handle_schedule, 'unschedule': handle_unschedule, 'clean': handle_clean, 'lifetime': handle_lifetime, 'debug': handle_debug, 'timer': handle_timers}
+    # <-- TAMBAHKAN 'reload' DI SINI
+    handler_map = {'start': handle_start, 'stop': handle_stop, 'reload': handle_reload, 'list': handle_list, 'status': handle_status, 'create': handle_create, 'delete': handle_delete, 'log': handle_log, 'schedule': handle_schedule, 'unschedule': handle_unschedule, 'clean': handle_clean, 'lifetime': handle_lifetime, 'debug': handle_debug, 'timer': handle_timers}
+    
     if len(sys.argv) > 1 and sys.argv[1].startswith('_internal'):
         internal_parser = argparse.ArgumentParser()
         internal_parser.add_argument('command'); internal_parser.add_argument('channel')
@@ -427,8 +432,11 @@ def main():
     if len(sys.argv) == 2 and sys.argv[1] not in handler_map and not sys.argv[1].startswith('-'):
         if (CHANNELS_DIR / sys.argv[1]).is_dir(): sys.argv.insert(1, 'status')
         else: print_error(f"Channel '{sys.argv[1]}' tidak ditemukan."); sys.exit(1)
+    
     p_start = subparsers.add_parser('start', help='Mulai stream. Contoh: ytlive start <channel>'); p_start.add_argument('channel')
     p_stop = subparsers.add_parser('stop', help='Hentikan stream. Contoh: ytlive stop <channel>'); p_stop.add_argument('channel')
+    # <-- DEFINISI PERINTAH BARU DI SINI
+    p_reload = subparsers.add_parser('reload', help='Restart stream (stop lalu start). Contoh: ytlive reload <channel>'); p_reload.add_argument('channel')
     p_list = subparsers.add_parser('list', help='Tampilkan status semua channel.')
     p_timer = subparsers.add_parser('timer', help='Tampilkan detail jadwal timer systemd.')
     p_status = subparsers.add_parser('status', help='Tampilkan status detail. Contoh: ytlive status <channel>'); p_status.add_argument('channel')
@@ -440,10 +448,13 @@ def main():
     p_unschedule = subparsers.add_parser('unschedule', help='Hapus jadwal. Contoh: ytlive unschedule <channel>'); p_unschedule.add_argument('channel')
     p_clean = subparsers.add_parser('clean', help='Bersihkan file sementara. Contoh: ytlive clean all'); p_clean.add_argument('channel')
     p_lifetime = subparsers.add_parser('lifetime', help='Jadikan stream permanen. Contoh: ytlive lifetime <channel>'); p_lifetime.add_argument('channel')
+    
     for name, func in handler_map.items():
         if name in subparsers.choices: subparsers.choices[name].set_defaults(func=func)
+        
     if len(sys.argv) == 1:
         parser.print_help(); print("\n" + "="*20 + " STATUS CHANNEL SAAT INI " + "="*20); handle_list(None); sys.exit(0)
+        
     args = parser.parse_args()
     args.func(args)
 
@@ -457,6 +468,6 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan dan fitur baru telah diterapkan."
+log_info "Fitur baru 'ytlive reload <channel>' telah ditambahkan."
 log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
