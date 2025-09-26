@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v30 - FINAL FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v31 - FINAL MODE B FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -144,9 +144,14 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v29 -> v30: Memperbaiki crash di Mode B dengan menghapus '-map -0:a'
-#      yang tidak valid, sesuai analisis dan saran pengguna. Pemetaan
-#      kini secara eksplisit hanya memilih stream yang diinginkan.
+# v26 -> v31: Perbaikan kritis untuk crash FFMPEG (SEGV) di Debian 12.
+#      - Jika di Mode B, video input (Input #0) memiliki audio track
+#        (bahkan jika bisu), dan ada audio eksternal (Input #1) dengan
+#        sample rate berbeda, FFMPEG bisa crash (SEGV).
+#      - Solusi: Dalam Mode B, FFMPEG kini secara eksplisit mengabaikan
+#        audio dari file video (-an setelah input video) dan hanya
+#        memakai audio eksternal. Audio eksternal juga di-resample
+#        ke AUDIO_SAMPLE_RATE yang standar (44100 Hz).
 # ===================================================================
 
 # ===================================================================
@@ -154,6 +159,8 @@ import re
 # ===================================================================
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
+MAX_BITRATE = "2500k"
+BUFFER_SIZE = "5000k"
 AUDIO_BITRATE = "128k"
 AUDIO_SAMPLE_RATE = "44100" 
 SERVICE_USER = "ytlive"
@@ -205,8 +212,10 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
+    # Input options - -re tetap ada untuk real-time input
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
+    
+    output_target = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
@@ -218,9 +227,12 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
+        # PERBAIKAN: Tambahkan '-an' setelah input video untuk mengabaikan audio bawaan video
+        # Input video sudah ditambahkan di awal cmd_list. Tambahkan '-an' di sini.
+        # Kemudian tambahkan input audio eksternal
+        cmd_list.extend(["-an", "-stream_loop", "-1", "-i", str(daily_audio_file)])
         
-        # PERBAIKAN: Menghapus '-map -0:a' yang bermasalah.
+        # Opsi output video dan audio yang sudah dimodifikasi
         final_options = [
             "-map", "0:v:0",      # Ambil video dari input 0 (file video)
             "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
@@ -234,6 +246,7 @@ def _build_ffmpeg_command(paths, mode):
     
     return cmd_list
 
+# Sisa dari skrip Python (handle_start, stop, list, dll) tidak diubah
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
@@ -466,6 +479,5 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan dan fitur baru telah diterapkan."
-log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
+log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
 log_info "Selamat melakukan streaming! ✅"
