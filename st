@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.3 - FIXED FOR DEBIAN 12)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.4 - FINAL FIX FOR DEBIAN 12)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -13,7 +13,6 @@ WORKER_SCRIPT_PATH="/usr/local/bin/ytlive-worker.sh"
 CHANNELS_BASE_DIR="/root/data/channels"
 SERVICE_USER="ytlive"
 SERVICE_GROUP="ytlive"
-FFMPEG_JV_DIR="/opt/ffmpeg-johnvansickle"
 
 # --- Fungsi Logging ---
 log_info() { echo -e "\e[32m[INFO]\e[0m $1"; }
@@ -24,7 +23,7 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi."
+apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests ffmpeg || log_error "Gagal menginstal dependensi."
 
 # --- 2. Pembersihan Total ---
 log_info "Membersihkan instalasi sebelumnya secara total..."
@@ -34,17 +33,11 @@ systemctl disable 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
 find /etc/systemd/system -name 'ytlive-*' -delete
 rm -f /etc/sudoers.d/ytlive
 systemctl daemon-reload
-rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}" /usr/bin/ffmpeg /usr/bin/ffprobe
-rm -rf "${FFMPEG_JV_DIR}/"
+rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}"
 (crontab -u ${SERVICE_USER} -r &>/dev/null) || true
 log_info "Pembersihan total selesai."
 
-# --- 3. Instal FFMPEG ---
-log_info "Menginstal FFMPEG..."
-apt-get install -y ffmpeg || log_error "Gagal menginstal FFMPEG dari repositori."
-log_info "FFMPEG berhasil diinstal."
-
-# --- 4. Buat Direktori & Pengguna ---
+# --- 3. Buat Direktori & Pengguna ---
 log_info "Membuat direktori, pengguna, dan izin akses..."
 mkdir -p "${CHANNELS_BASE_DIR}"
 id -g "${SERVICE_GROUP}" &>/dev/null || groupadd "${SERVICE_GROUP}"
@@ -54,13 +47,13 @@ setfacl -m u:${SERVICE_USER}:x /root
 setfacl -m u:${SERVICE_USER}:x /root/data
 log_info "Direktori dan izin akses berhasil dikonfigurasi."
 
-# --- 5. Buat Aturan Izin Sudo ---
+# --- 4. Buat Aturan Izin Sudo ---
 log_info "Membuat aturan Sudo untuk izin service..."
 echo 'ytlive ALL=(ALL) NOPASSWD: /bin/systemctl start ytlive-*, /bin/systemctl stop ytlive-*' | tee /etc/sudoers.d/ytlive
 chmod 0440 /etc/sudoers.d/ytlive
 log_info "Aturan Sudo berhasil dibuat."
 
-# --- 6. Buat Skrip Pekerja (Bash Worker) ---
+# --- 5. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
 cat << EOF > "${WORKER_SCRIPT_PATH}"
 #!/bin/bash
@@ -71,7 +64,7 @@ exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANN
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
 
-# --- 7. Buat Template Service Systemd ---
+# --- 6. Buat Template Service Systemd ---
 log_info "Membuat template service Systemd..."
 cat << EOF > "/etc/systemd/system/ytlive-stream@.service"
 [Unit]
@@ -104,7 +97,7 @@ ExecStart=${PYTHON_SCRIPT_PATH} stop %i
 EOF
 systemctl daemon-reload
 
-# --- 8. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
+# --- 7. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
@@ -123,19 +116,10 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v14 -> v15: Konsolidasi perbaikan minor.
-#       - Menambahkan variabel SERVICE_GROUP dan COLOR_WARN yang hilang
-#         untuk memperbaiki 'NameError' pada perintah 'create' dan 'delete'.
-#       - Memastikan semua fitur sebelumnya tetap berfungsi.
-# v15 -> v15.1: Perbaikan Mode B
-#       - Menambahkan -map -0:a untuk menonaktifkan audio dari input video
-#         agar tidak konflik dengan audio dari file .m4a/.mp3.
-# v15.1 -> v15.2: Kompatibilitas Debian 12
-#       - Menghapus pip3 install --upgrade pip untuk menghindari error PEP 668.
-#       - Menggunakan python3-psutil dan python3-requests melalui apt.
-# v15.2 -> v15.3: Perbaikan Symbolic Link
-#       - Menghapus ln -sf /usr/bin/ffmpeg /usr/bin/ffmpeg dan ln -sf /usr/bin/ffprobe /usr/bin/ffprobe
-#         untuk menghindari error "Too many levels of symbolic links".
+# v15.3 -> v15.4: Perbaikan Kritis untuk FFMPEG di Debian 12
+#          - Menghapus '-map -0:a' yang menyebabkan error 'Stream map matches no streams'.
+#          - Perintah FFMPEG kini langsung memetakan video (0:v:0) dan audio (1:a:0)
+#            tanpa perlu menonaktifkan audio dari input video secara eksplisit.
 # ===================================================================
 
 # ===================================================================
@@ -202,8 +186,9 @@ def _build_ffmpeg_command(paths, mode):
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
-                         "-map", "-0:a", "-map", "0:v:0", "-map", "1:a:0", 
+        # INI BAGIAN YANG DIPERBAIKI: Menghapus '-map -0:a'
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file),
+                         "-map", "0:v:0", "-map", "1:a:0",
                          "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
     else:
         return None
@@ -254,7 +239,7 @@ def handle_list(args):
         if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{ch_name}.service"]).returncode == 0:
             status = f"{COLOR_STATUS_RUNNING}[ RUNNING ]{COLOR_RESET}"
         elif paths['lock'].exists() and not is_scheduled:
-             status = f"{COLOR_STATUS_CRASH}[  CRASH  ]{COLOR_RESET}"
+              status = f"{COLOR_STATUS_CRASH}[  CRASH  ]{COLOR_RESET}"
         
         if is_scheduled:
             try:
@@ -302,13 +287,13 @@ def handle_status(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
     print("-" * 60); print(f"Status Detail untuk Channel: {COLOR_CYAN}{args.channel}{COLOR_RESET}")
-    mode = _get_channel_mode(paths); print(f"  - Mode             : {mode}")
+    mode = _get_channel_mode(paths); print(f"  - Mode               : {mode}")
     status_str = f"{COLOR_STATUS_STOPPED}STOPPED{COLOR_RESET}"
     if Path(f"/etc/systemd/system/ytlive-stream@{args.channel}.service").exists():
         if subprocess.run(['systemctl', 'is-active', '--quiet', f"ytlive-stream@{args.channel}.service"]).returncode == 0: status_str = f"{COLOR_STATUS_RUNNING}RUNNING{COLOR_RESET}"
         elif paths['lock'].exists(): status_str = f"{COLOR_STATUS_CRASH}CRASHED{COLOR_RESET}"
-    print(f"  - Status Service   : {status_str}")
-    print("  - Log Terakhir     : ")
+    print(f"  - Status Service     : {status_str}")
+    print("  - Log Terakhir       : ")
     if not paths["log"].exists(): print("    (Log file tidak ditemukan)")
     else:
         try:
