@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v27 - FINAL STABLE)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v29 - MODE B SEGV FIX)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -24,10 +24,9 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-# Menggunakan apt untuk psutil & requests agar kompatibel dengan Debian 12
 apt-get install -y python3 python3-pip python3-psutil python3-requests wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
 
-# --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
+# --- 2. Pembaruan Komponen Skrip ---
 log_info "Memperbarui komponen skrip (jadwal dan stream aktif akan tetap aman)..."
 rm -f /etc/systemd/system/ytlive-stream@.service
 rm -f /etc/systemd/system/ytlive-schedule-start@.service
@@ -145,11 +144,11 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v25 -> v27 (Final): Memperbaiki crash FFMPEG di Debian 12.
-#      - Opsi '-maxrate' dan '-bufsize' yang konflik DIHAPUS saat
-#        menggunakan '-c:v copy' di semua mode.
-#      - Ini membuat skrip ringan, stabil, dan sesuai dengan perintah
-#        manual yang terbukti berhasil.
+# v28 -> v29: Memperbaiki crash FFMPEG (SEGV) di Mode B secara definitif.
+#      - Penyebabnya adalah konflik antara audio track (bisu) di file video
+#        dengan file audio eksternal.
+#      - Solusi: Menambahkan '-map -0:a' untuk secara eksplisit MENGABAIKAN
+#        semua audio track dari file video, dan hanya memakai audio eksternal.
 # ===================================================================
 
 # ===================================================================
@@ -158,6 +157,7 @@ import re
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 AUDIO_BITRATE = "128k"
+AUDIO_SAMPLE_RATE = "44100" 
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
@@ -208,8 +208,6 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    
-    # Opsi -maxrate dan -bufsize dihapus dari sini karena konflik dengan mode 'copy'
     output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
@@ -222,21 +220,25 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        audio_codec_options = []
-        if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
-            audio_codec_options = ["-c:a", "copy"]
-        else: # .mp3
-            audio_codec_options = ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
-
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
-                         "-map", "0:v:0", "-map", "1:a:0", 
-                         "-c:v", "copy"] + audio_codec_options)
-        cmd_list.extend(output_target)
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
+        
+        # PERBAIKAN: Abaikan audio dari video (-map -0:a), dan selalu re-encode audio eksternal
+        # Ini adalah cara paling stabil untuk menghindari crash SEGV
+        final_options = [
+            "-map", "0:v:0",      # Ambil video dari input 0 (file video)
+            "-map", "-0:a",       # Abaikan SEMUA audio dari input 0 (file video)
+            "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE
+        ]
+        
+        cmd_list.extend(final_options + output_target)
     else:
         return None
     
     return cmd_list
 
+# (Sisa dari skrip Python (handle_start, stop, list, dll) tidak diubah)
 def handle_start(args):
     paths = _get_paths(args.channel)
     if not paths["dir"].is_dir(): return print_error(f"Channel '{args.channel}' tidak ditemukan.")
@@ -469,5 +471,6 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
+log_info "Semua perbaikan dan fitur baru telah diterapkan."
+log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
