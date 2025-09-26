@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v26 - FINAL STABLE)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v27 - FINAL STABLE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -24,7 +24,7 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-# PERBAIKAN: Instal psutil dan requests menggunakan apt agar kompatibel dengan Debian 12
+# Menggunakan apt untuk psutil & requests agar kompatibel dengan Debian 12
 apt-get install -y python3 python3-pip python3-psutil python3-requests wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
 
 # --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
@@ -37,7 +37,6 @@ rm -f /etc/logrotate.d/ytlive
 rm -f "${PYTHON_SCRIPT_PATH}"
 rm -f "${WORKER_SCRIPT_PATH}"
 log_info "Komponen lama berhasil dihapus, siap untuk diperbarui."
-
 
 # --- 3. Instal FFMPEG ---
 if [ ! -f "/usr/bin/ffmpeg" ]; then
@@ -52,7 +51,6 @@ if [ ! -f "/usr/bin/ffmpeg" ]; then
 else
     log_info "FFMPEG sudah ada, instalasi dilewati."
 fi
-
 
 # --- 4. Buat Direktori & Pengguna ---
 log_info "Memeriksa direktori, pengguna, dan izin akses..."
@@ -85,14 +83,12 @@ cat << EOF > "/etc/logrotate.d/ytlive"
 EOF
 log_info "Logrotate untuk ytlive berhasil dikonfigurasi."
 
-
 # --- 7. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
 cat << EOF > "${WORKER_SCRIPT_PATH}"
 #!/bin/bash
 set -e
 CHANNEL_NAME=\$1
-# Jalankan (exec) FFMPEG. Perintah FFMPEG diambil dari output Python.
 exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANNEL_NAME") &>> stream.log
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
@@ -149,10 +145,11 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v25 -> v26: Menggabungkan logika FFMPEG (v24) dengan perbaikan
-#      Debian 12 (v25) untuk versi final yang stabil.
-#      - Installer menggunakan 'apt' untuk dependensi Python.
-#      - Logika FFMPEG menggunakan '-c:v copy' untuk kedua mode.
+# v25 -> v27 (Final): Memperbaiki crash FFMPEG di Debian 12.
+#      - Opsi '-maxrate' dan '-bufsize' yang konflik DIHAPUS saat
+#        menggunakan '-c:v copy' di semua mode.
+#      - Ini membuat skrip ringan, stabil, dan sesuai dengan perintah
+#        manual yang terbukti berhasil.
 # ===================================================================
 
 # ===================================================================
@@ -160,8 +157,6 @@ import re
 # ===================================================================
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
-MAX_BITRATE = "2500k"
-BUFFER_SIZE = "5000k"
 AUDIO_BITRATE = "128k"
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
@@ -213,11 +208,13 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+    
+    # Opsi -maxrate dan -bufsize dihapus dari sini karena konflik dengan mode 'copy'
+    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
-        cmd_list.extend(common_out_opts)
+        cmd_list.extend(output_target)
 
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
@@ -234,7 +231,7 @@ def _build_ffmpeg_command(paths, mode):
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
                          "-map", "0:v:0", "-map", "1:a:0", 
                          "-c:v", "copy"] + audio_codec_options)
-        cmd_list.extend(common_out_opts)
+        cmd_list.extend(output_target)
     else:
         return None
     
@@ -390,7 +387,6 @@ def handle_schedule(args):
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
-
 
 def handle_unschedule(args, quiet=False):
     ch_name = args.channel
