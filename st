@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.2 - FIXED FOR DEBIAN 12)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.3 - FIXED FOR DEBIAN 12)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -42,8 +42,6 @@ log_info "Pembersihan total selesai."
 # --- 3. Instal FFMPEG ---
 log_info "Menginstal FFMPEG..."
 apt-get install -y ffmpeg || log_error "Gagal menginstal FFMPEG dari repositori."
-ln -sf /usr/bin/ffmpeg /usr/bin/ffmpeg
-ln -sf /usr/bin/ffprobe /usr/bin/ffprobe
 log_info "FFMPEG berhasil diinstal."
 
 # --- 4. Buat Direktori & Pengguna ---
@@ -135,6 +133,9 @@ import re
 # v15.1 -> v15.2: Kompatibilitas Debian 12
 #       - Menghapus pip3 install --upgrade pip untuk menghindari error PEP 668.
 #       - Menggunakan python3-psutil dan python3-requests melalui apt.
+# v15.2 -> v15.3: Perbaikan Symbolic Link
+#       - Menghapus ln -sf /usr/bin/ffmpeg /usr/bin/ffmpeg dan ln -sf /usr/bin/ffprobe /usr/bin/ffprobe
+#         untuk menghindari error "Too many levels of symbolic links".
 # ===================================================================
 
 # ===================================================================
