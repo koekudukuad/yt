@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#            SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.2 - JVS 6.0.1 FIXED)
+#            SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.2 - JVS 6.0.1 FINAL FIXED)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -63,6 +63,7 @@ rm -rf /tmp/ffmpeg.tar.xz "${EXTRACTED_DIR}"
 log_info "FFmpeg v6.0.1 AMD64 berhasil diinstal di ${FFMPEG_BINARY_PATH}."
 
 # --- 3. Pembaruan Skrip (Non-Disruptive) ---
+# MEMINDAHKAN LOG AGAR BARIS 'if' TIDAK TERTUKAR DENGAN LOG INFO DI DEPANNYA.
 log_info "Memeriksa stream yang sedang berjalan sebelum pembaruan skrip..."
 if systemctl is-active --quiet 'ytlive-stream@*.service'; then
     log_warn "STREAM AKTIF TERDETEKSI!"
