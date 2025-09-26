@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v33 - FINAL MAPPING FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v34 - FINAL STABLE)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -24,9 +24,10 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
+# Menggunakan apt untuk psutil & requests agar kompatibel dengan Debian 12
 apt-get install -y python3 python3-pip python3-psutil python3-requests wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
 
-# --- 2. Pembaruan Komponen Skrip ---
+# --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
 log_info "Memperbarui komponen skrip (jadwal dan stream aktif akan tetap aman)..."
 rm -f /etc/systemd/system/ytlive-stream@.service
 rm -f /etc/systemd/system/ytlive-schedule-start@.service
@@ -36,6 +37,7 @@ rm -f /etc/logrotate.d/ytlive
 rm -f "${PYTHON_SCRIPT_PATH}"
 rm -f "${WORKER_SCRIPT_PATH}"
 log_info "Komponen lama berhasil dihapus, siap untuk diperbarui."
+
 
 # --- 3. Instal FFMPEG ---
 if [ ! -f "/usr/bin/ffmpeg" ]; then
@@ -50,6 +52,7 @@ if [ ! -f "/usr/bin/ffmpeg" ]; then
 else
     log_info "FFMPEG sudah ada, instalasi dilewati."
 fi
+
 
 # --- 4. Buat Direktori & Pengguna ---
 log_info "Memeriksa direktori, pengguna, dan izin akses..."
@@ -81,6 +84,7 @@ cat << EOF > "/etc/logrotate.d/ytlive"
 }
 EOF
 log_info "Logrotate untuk ytlive berhasil dikonfigurasi."
+
 
 # --- 7. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
@@ -144,10 +148,16 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v31 -> v33: Perbaikan final untuk Mode B. Menghapus flag '-an' yang
-#      menyebabkan error 'matches disabled streams'. Skrip kini hanya
-#      secara eksplisit me-mapping stream yang diinginkan (0:v:0 dan 1:a:0),
-#      yang secara otomatis akan mengabaikan audio dari file video.
+# v26 -> v34 (Final): Perbaikan konflik FFMPEG di Debian 12 dan
+#      mengimplementasikan preferensi pengguna secara tepat.
+#      - Dependensi Python diinstal via 'apt' untuk kompatibilitas Debian 12.
+#      - Mode A & B kini menggunakan '-c:v copy' untuk video.
+#      - Opsi '-maxrate' dan '-bufsize' DIHAPUS dari semua mode karena
+#        konflik dengan '-c:v copy' dan menyebabkan crash di Debian 12,
+#        dan tidak ada di perintah manual yang berhasil.
+#      - Mode B: Video di-copy, audio eksternal di-re-encode ke AAC dan
+#        di-resample ke 44100 Hz. Audio bawaan video diabaikan.
+#      - Installer non-destruktif untuk jadwal dan stream aktif.
 # ===================================================================
 
 # ===================================================================
@@ -155,8 +165,7 @@ import re
 # ===================================================================
 CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
-MAX_BITRATE = "2500k"
-BUFFER_SIZE = "5000k"
+# MAX_BITRATE dan BUFFER_SIZE dihapus dari sini karena tidak digunakan lagi dengan -c:v copy
 AUDIO_BITRATE = "128k"
 AUDIO_SAMPLE_RATE = "44100" 
 SERVICE_USER = "ytlive"
@@ -209,7 +218,8 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    output_target = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+    # PERBAIKAN: -maxrate dan -bufsize dihapus dari sini (common_out_opts)
+    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
@@ -221,15 +231,17 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
+        # PERBAIKAN: Tambahkan '-an' setelah input video (-i str(video)) untuk mengabaikan audio bawaan video
+        # Input video sudah ditambahkan di awal cmd_list. Tambahkan '-an' di sini.
+        # Kemudian tambahkan input audio eksternal
+        cmd_list.extend(["-an", "-stream_loop", "-1", "-i", str(daily_audio_file)])
         
-        # PERBAIKAN FINAL: Hapus flag '-an' yang salah. Cukup petakan stream yang diinginkan.
-        # FFMPEG akan otomatis mengabaikan stream yang tidak dipetakan (seperti audio dari video).
+        # Opsi output video dan audio yang sudah dimodifikasi
         final_options = [
             "-map", "0:v:0",      # Ambil video dari input 0 (file video)
             "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE
+            "-c:v", "copy",       # Video tetap di-copy
+            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE # Audio di-encode/resample
         ]
         
         cmd_list.extend(final_options + output_target)
@@ -316,8 +328,7 @@ def handle_log(args):
     try:
         with subprocess.Popen(['tail', '-f', str(log_file)]) as proc:
             proc.wait()
-    except KeyboardInterrupt:
-        print("\nKeluar dari mode log.")
+    except KeyboardInterrupt: print("\nKeluar dari mode log.")
 
 def handle_status(args):
     paths = _get_paths(args.channel)
