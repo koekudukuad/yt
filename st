@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.3 - Smart FFmpeg Check)
+#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.4 - Final Path Fix)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -30,25 +30,21 @@ timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
-# --- 2. Instalasi FFmpeg Cerdas (Smart Installation) ---
+# --- 2. Instalasi FFmpeg Cerdas & Penyesuaian PATH (v17.4) ---
 log_info "Memeriksa versi FFmpeg yang terinstal..."
 
-# Cek jika command 'ffmpeg' ada DAN output version mengandung "6.0.1"
-# 'ffmpeg -version 2>&1' digunakan karena ffmpeg sering output ke stderr
-if command -v ffmpeg &>/dev/null && ffmpeg -version 2>&1 | grep -q "ffmpeg version 6.0.1"; then
-    log_info "FFmpeg JVS v6.0.1 sudah terinstal. Melewati langkah instalasi FFmpeg."
+# Cek file langsung di path target, lebih andal daripada 'command -v'
+if [ -f "${FFMPEG_BINARY_PATH}" ] && "${FFMPEG_BINARY_PATH}" -version 2>&1 | grep -q "ffmpeg version 6.0.1"; then
+    log_info "FFmpeg JVS v6.0.1 sudah terinstal di ${FFMPEG_BINARY_PATH}. Melewati instalasi."
 else
     log_warn "FFmpeg v6.0.1 tidak ditemukan atau versi salah. Memulai instalasi..."
 
-    # 2a. Hapus FFmpeg dari APT/Debian (jika ada)
     log_info "Menghapus FFmpeg dari APT (jika ada) untuk menghindari konflik..."
     apt-get purge -y ffmpeg &>/dev/null || true
 
-    # 2b. Hapus FFmpeg manual lama (jika ada)
-    log_info "Menghapus instalasi FFmpeg lama di ${FFMPEG_TARGET_PATH}..."
+    log_info "Menghapus instalasi FFmpeg manual lama di ${FFMPEG_TARGET_PATH}..."
     rm -f "${FFMPEG_BINARY_PATH}" "${FFMPEG_TARGET_PATH}/ffprobe" || true
 
-    # 2c. Unduh dan Instal JVS v6.0.1
     log_info "Mengunduh FFmpeg JVS v6.0.1..."
     wget -q "${FFMPEG_URL}" -O /tmp/ffmpeg.tar.xz || log_error "Gagal mengunduh FFmpeg dari JVS."
     
@@ -65,6 +61,17 @@ else
     rm -rf /tmp/ffmpeg.tar.xz "${EXTRACTED_DIR}"
 
     log_info "FFmpeg v6.0.1 AMD64 berhasil diinstal di ${FFMPEG_BINARY_PATH}."
+
+    # === BLOK PERBAIKAN PENTING UNTUK PATH ===
+    log_info "Membuat symbolic link untuk memastikan 'ffmpeg' dapat dipanggil secara global..."
+    # Hapus link lama/rusak jika ada, lalu buat yang baru
+    rm -f /usr/bin/ffmpeg
+    ln -s "${FFMPEG_BINARY_PATH}" /usr/bin/ffmpeg
+    log_info "Symbolic link dibuat: /usr/bin/ffmpeg -> ${FFMPEG_BINARY_PATH}"
+
+    log_info "Membersihkan cache path shell agar command baru segera dikenali..."
+    hash -r
+    # === AKHIR BLOK PERBAIKAN ===
 fi
 
 
@@ -150,6 +157,7 @@ systemctl daemon-reload
 
 # --- 8. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
+# (Isi skrip Python tidak perlu diubah, karena sudah memanggil path yang benar)
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
 import os
@@ -373,18 +381,14 @@ def handle_schedule(args):
     ch_name = args.channel
     start_cal = f"*-*-* {start_dt.strftime('%H:%M:%S')}"
     stop_cal = f"*-*-* {stop_dt.strftime('%H:%M:%S')}"
-    start_timer_content = f"[Unit]\nDescription=Timer to start YTLive channel {ch_name}\n[Timer]\nOnCalendar={start_cal}\nPersistent=true\n[Install]\nWantedBy=timers.target"
-    stop_timer_content = f"[Unit]\nDescription=Timer to stop YTLive channel {ch_name}\n[Timer]\nOnCalendar={stop_cal}\nPersistent=true\n[Install]\nWantedBy=timers.target"
+    start_timer_content = f"""[Unit]\nDescription=Timer to start YTLive channel {ch_name}\n[Timer]\nOnCalendar={start_cal}\nPersistent=true\nUnit=ytlive-schedule-start@{ch_name}.service\n[Install]\nWantedBy=timers.target"""
+    stop_timer_content = f"""[Unit]\nDescription=Timer to stop YTLive channel {ch_name}\n[Timer]\nOnCalendar={stop_cal}\nPersistent=true\nUnit=ytlive-schedule-stop@{ch_name}.service\n[Install]\nWantedBy=timers.target"""
     (SYSTEMD_DIR / f"ytlive-schedule-start@{ch_name}.timer").write_text(start_timer_content)
     (SYSTEMD_DIR / f"ytlive-schedule-stop@{ch_name}.timer").write_text(stop_timer_content)
-    # The service files are already created, so we just need to manage the timers
-    start_service_file = SYSTEMD_DIR / f"ytlive-schedule-start@{ch_name}.service"
-    stop_service_file = SYSTEMD_DIR / f"ytlive-schedule-stop@{ch_name}.service"
-    if not start_service_file.exists(): (start_service_file).write_text(f"[Unit]\nDescription=start\n[Service]\nType=oneshot\nExecStart={PYTHON_SCRIPT_PATH} start {ch_name}")
-    if not stop_service_file.exists(): (stop_service_file).write_text(f"[Unit]\nDescription=stop\n[Service]\nType=oneshot\nExecStart={PYTHON_SCRIPT_PATH} stop {ch_name}")
     try:
         subprocess.run(['systemctl', 'daemon-reload'], check=True)
-        subprocess.run(['systemctl', 'enable', '--now', f"ytlive-schedule-start@{ch_name}.timer", f"ytlive-schedule-stop@{ch_name}.timer"], check=True, capture_output=True)
+        subprocess.run(['systemctl', 'enable', f"ytlive-schedule-start@{ch_name}.timer", f"ytlive-schedule-stop@{ch_name}.timer"], check=True, capture_output=True)
+        subprocess.run(['systemctl', 'start', f"ytlive-schedule-start@{ch_name}.timer", f"ytlive-schedule-stop@{ch_name}.timer"], check=True, capture_output=True)
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
