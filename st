@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15 - FINAL STABLE)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.1 - FIXED FOR DEBIAN 12)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -131,6 +131,9 @@ import re
 #       - Menambahkan variabel SERVICE_GROUP dan COLOR_WARN yang hilang
 #         untuk memperbaiki 'NameError' pada perintah 'create' dan 'delete'.
 #       - Memastikan semua fitur sebelumnya tetap berfungsi.
+# v15 -> v15.1: Perbaikan Mode B
+#       - Menambahkan -map -0:a untuk menonaktifkan audio dari input video
+#         agar tidak konflik dengan audio dari file .m4a/.mp3.
 # ===================================================================
 
 # ===================================================================
@@ -141,7 +144,7 @@ YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 MAX_BITRATE = "2500k"
 BUFFER_SIZE = "5000k"
 SERVICE_USER = "ytlive"
-SERVICE_GROUP = "ytlive" # Ditambahkan untuk fix NameError
+SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -150,7 +153,7 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 # --- Kode Warna ---
 COLOR_RESET = "\033[0m"
 COLOR_INFO = "\033[0;32m"
-COLOR_WARN = "\033[0;33m" # Ditambahkan untuk fix NameError
+COLOR_WARN = "\033[0;33m"
 COLOR_ERROR = "\033[0;31m"
 COLOR_CYAN = "\033[0;36m"
 COLOR_STATUS_RUNNING = COLOR_INFO
@@ -198,7 +201,7 @@ def _build_ffmpeg_command(paths, mode):
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
-                         "-map", "0:v:0", "-map", "1:a:0", 
+                         "-map", "-0:a", "-map", "0:v:0", "-map", "1:a:0", 
                          "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
     else:
         return None
@@ -362,7 +365,6 @@ def handle_schedule(args):
         print_info(f"Jadwal '{ch_name}' berhasil diatur: {start_dt.strftime('%H:%M')} - {stop_dt.strftime('%H:%M')}")
     except subprocess.CalledProcessError as e:
         print_error(f"Gagal mengatur timer systemd. Detail: {e.stderr.decode()}")
-
 
 def handle_unschedule(args, quiet=False):
     ch_name = args.channel
