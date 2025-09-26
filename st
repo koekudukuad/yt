@@ -144,7 +144,7 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v26 -> v31: Perbaikan kritis untuk crash FFMPEG (SEGV) di Debian 12.
+# v26 -> v31: Memperbaiki crash FFMPEG di Mode B secara definitif.
 #      - Jika di Mode B, video input (Input #0) memiliki audio track
 #        (bahkan jika bisu), dan ada audio eksternal (Input #1) dengan
 #        sample rate berbeda, FFMPEG bisa crash (SEGV).
@@ -212,13 +212,11 @@ def _build_ffmpeg_command(paths, mode):
     day_of_year = datetime.now().timetuple().tm_yday
     video = videos[(day_of_year - 1) % len(videos)]
 
-    # Input options - -re tetap ada untuk real-time input
-    # Video input pertama, dengan '-an' untuk mengabaikan audio bawaan
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    
     output_target = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
+        # Mode A: Copy video dan audio apa adanya. Tetap sederhana dan ringan.
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
         cmd_list.extend(output_target)
 
@@ -228,17 +226,17 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
-        # PERBAIKAN: Tambahkan '-an' setelah input video (-i str(video)) untuk mengabaikan audio bawaan video
-        # Input video sudah ditambahkan di awal cmd_list. Tambahkan '-an' di sini.
-        # Kemudian tambahkan input audio eksternal
+        # PERBAIKAN: Masukkan '-an' DI SINI untuk mengabaikan audio bawaan video
+        # lalu tambahkan input audio eksternal
         cmd_list.extend(["-an", "-stream_loop", "-1", "-i", str(daily_audio_file)])
         
         # Opsi output video dan audio yang sudah dimodifikasi
+        # Video di-copy, audio eksternal di-re-encode/copy dan di-resample
         final_options = [
             "-map", "0:v:0",      # Ambil video dari input 0 (file video)
             "-map", "1:a:0",      # Ambil audio dari input 1 (file audio eksternal)
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE
+            "-c:v", "copy",       # Video tetap di-copy
+            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE # Audio di-encode/resample
         ]
         
         cmd_list.extend(final_options + output_target)
