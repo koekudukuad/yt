@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.1 - FIXED FOR DEBIAN 12)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.2 - FIXED FOR DEBIAN 12)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -132,6 +132,9 @@ import re
 # v15 -> v15.1: Perbaikan Mode B
 #       - Menambahkan -map -0:a untuk menonaktifkan audio dari input video
 #         agar tidak konflik dengan audio dari file .m4a/.mp3.
+# v15.1 -> v15.2: Kompatibilitas Debian 12
+#       - Menghapus pip3 install --upgrade pip untuk menghindari error PEP 668.
+#       - Menggunakan python3-psutil dan python3-requests melalui apt.
 # ===================================================================
 
 # ===================================================================
