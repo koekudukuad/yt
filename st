@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.6 - Final Idempotent Fix)
+#     SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.7 - Attempting JVS 6.0.0)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -13,7 +13,8 @@ WORKER_SCRIPT_PATH="/usr/local/bin/ytlive-worker.sh"
 CHANNELS_BASE_DIR="/root/data/channels"
 SERVICE_USER="ytlive"
 SERVICE_GROUP="ytlive"
-FFMPEG_URL="https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0.1-amd64-static.tar.xz"
+# --- Konfigurasi FFmpeg JVS 6.0.0 AMD64 yang stabil ---
+FFMPEG_URL="https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0-amd64-static.tar.xz"
 FFMPEG_TARGET_PATH="/usr/local/bin"
 FFMPEG_BINARY_PATH="${FFMPEG_TARGET_PATH}/ffmpeg"
 
@@ -29,11 +30,11 @@ apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
 apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
 # --- 2. Instalasi FFmpeg (Hanya jika diperlukan) ---
-log_info "Memeriksa file binary FFmpeg JVS v6.0.1..."
-if [ -f "${FFMPEG_BINARY_PATH}" ] && "${FFMPEG_BINARY_PATH}" -version 2>&1 | grep -q "ffmpeg version 6.0.1"; then
-    log_info "FFmpeg v6.0.1 sudah ada. Melewati unduhan."
+log_info "Memeriksa file binary FFmpeg JVS v6.0.0..."
+if [ -f "${FFMPEG_BINARY_PATH}" ] && "${FFMPEG_BINARY_PATH}" -version 2>&1 | grep -q "ffmpeg version 6.0-static"; then
+    log_info "FFmpeg v6.0.0 sudah ada. Melewati unduhan."
 else
-    log_warn "FFmpeg v6.0.1 tidak ditemukan/salah. Memulai proses instalasi..."
+    log_warn "FFmpeg v6.0.0 tidak ditemukan/salah. Memulai proses instalasi..."
     apt-get purge -y ffmpeg &>/dev/null || true
     rm -f "${FFMPEG_BINARY_PATH}" "${FFMPEG_TARGET_PATH}/ffprobe" || true
     wget -q "${FFMPEG_URL}" -O /tmp/ffmpeg.tar.xz || log_error "Gagal mengunduh FFmpeg dari JVS."
@@ -46,10 +47,10 @@ else
     mv "${EXTRACTED_DIR}/ffprobe" "${FFMPEG_TARGET_PATH}/ffprobe" || true
     chmod +x "${FFMPEG_BINARY_PATH}" "${FFMPEG_TARGET_PATH}/ffprobe"
     rm -rf /tmp/ffmpeg.tar.xz "${EXTRACTED_DIR}"
-    log_info "FFmpeg v6.0.1 AMD64 berhasil ditempatkan di ${FFMPEG_BINARY_PATH}."
+    log_info "FFmpeg v6.0.0 AMD64 berhasil ditempatkan di ${FFMPEG_BINARY_PATH}."
 fi
 
-# --- 2b. Integrasi Sistem Wajib (Selalu Dijalankan Sesuai Permintaan) ---
+# --- 2b. Integrasi Sistem Wajib (Selalu Dijalankan) ---
 log_info "Menjalankan integrasi sistem untuk memastikan 'ffmpeg' dapat diakses..."
 log_info "Membuat ulang symbolic link: /usr/bin/ffmpeg -> ${FFMPEG_BINARY_PATH}"
 rm -f /usr/bin/ffmpeg # Aman untuk dijalankan meskipun file tidak ada
@@ -271,7 +272,7 @@ log_info "Skrip Python berhasil ditempatkan."
 log_info "==================================================="
 log_info "        YTLIVE STREAMER SETUP COMPLETE!"
 log_info "==================================================="
-log_info "FFmpeg yang stabil (JVS v6.0.1) telah diverifikasi dan terintegrasi."
+log_info "FFmpeg yang stabil (JVS v6.0.0) telah diverifikasi dan terintegrasi."
 log_warn "Stream yang sedang berjalan harus di-reload (ytlive reload NAMA_CHANNEL)!"
 log_info "Untuk melihat perintah, ketik: ${PYTHON_SCRIPT_NAME}"
 log_info "Selamat melakukan streaming! ✅"
