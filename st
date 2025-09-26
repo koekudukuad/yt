@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v25 - DEBIAN 12 PEP 668 FIX)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v24.1 - ROBUST MODE B)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -24,8 +24,8 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-# PERBAIKAN: Instal psutil dan requests menggunakan apt agar kompatibel dengan Debian 12
-apt-get install -y python3 python3-pip python3-psutil python3-requests wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
+apt-get install -y python3 python3-pip wget tar xz-utils acl policykit-1 logrotate || log_error "Gagal menginstal dependensi."
+pip3 install psutil requests || log_error "Gagal menginstal psutil/requests."
 
 # --- 2. Pembaruan Komponen Skrip (Jadwal & Stream Aman) ---
 log_info "Memperbarui komponen skrip (jadwal dan stream aktif akan tetap aman)..."
@@ -37,7 +37,6 @@ rm -f /etc/logrotate.d/ytlive
 rm -f "${PYTHON_SCRIPT_PATH}"
 rm -f "${WORKER_SCRIPT_PATH}"
 log_info "Komponen lama berhasil dihapus, siap untuk diperbarui."
-
 
 # --- 3. Instal FFMPEG ---
 if [ ! -f "/usr/bin/ffmpeg" ]; then
@@ -52,7 +51,6 @@ if [ ! -f "/usr/bin/ffmpeg" ]; then
 else
     log_info "FFMPEG sudah ada, instalasi dilewati."
 fi
-
 
 # --- 4. Buat Direktori & Pengguna ---
 log_info "Memeriksa direktori, pengguna, dan izin akses..."
@@ -149,10 +147,10 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v24 -> v25: Penyesuaian installer untuk Debian 12 (PEP 668).
-#      - Instalasi dependensi Python (psutil, requests) dipindahkan
-#        dari 'pip' ke 'apt' (python3-psutil, python3-requests)
-#        untuk menghindari error 'externally-managed-environment'.
+# v22 -> v24.1: Stabilitas Mode B (Video + Audio) ditingkatkan.
+#      - Video dalam Mode B sekarang selalu di-re-encode ke H.264
+#        untuk memastikan kontrol bitrate (-maxrate, -bufsize) diterapkan
+#        dengan benar, mencegah crash FFMPEG (SEGV / Segmentation Fault).
 # ===================================================================
 
 # ===================================================================
@@ -162,7 +160,9 @@ CHANNELS_DIR = Path("/root/data/channels")
 YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
 MAX_BITRATE = "2500k"
 BUFFER_SIZE = "5000k"
+VIDEO_PRESET = "veryfast"
 AUDIO_BITRATE = "128k"
+AUDIO_SAMPLE_RATE = "44100"
 SERVICE_USER = "ytlive"
 SERVICE_GROUP = "ytlive"
 LIFETIME_TAG = "# LIFETIME_STREAM"
@@ -213,11 +213,11 @@ def _build_ffmpeg_command(paths, mode):
     video = videos[(day_of_year - 1) % len(videos)]
 
     cmd_list = [FFMPEG_PATH, "-re", "-fflags", "+genpts", "-stream_loop", "-1", "-i", str(video)]
-    common_out_opts = ["-f", "flv", "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE, f"{YOUTUBE_RTMP_URL}/{key}"]
+    output_target = ["-f", "flv", f"{YOUTUBE_RTMP_URL}/{key}"]
 
     if mode == "A (Video Saja)":
         cmd_list.extend(["-c:v", "copy", "-c:a", "copy"])
-        cmd_list.extend(common_out_opts)
+        cmd_list.extend(output_target)
 
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")) + list(paths["dir"].glob("*.aac")))
@@ -225,16 +225,22 @@ def _build_ffmpeg_command(paths, mode):
         
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
         
+        # PERBAIKAN: Video di-re-encode untuk stabilitas VBV saat mixing
+        video_encoding_options = [
+            "-map", "0:v:0",
+            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-pix_fmt", "yuv420p",
+            "-maxrate", MAX_BITRATE, "-bufsize", BUFFER_SIZE
+        ]
+        
         audio_codec_options = []
         if daily_audio_file.suffix.lower() in ['.m4a', '.aac']:
             audio_codec_options = ["-c:a", "copy"]
         else: # .mp3
-            audio_codec_options = ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
+            audio_codec_options = ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE]
 
-        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file), 
-                         "-map", "0:v:0", "-map", "1:a:0", 
-                         "-c:v", "copy"] + audio_codec_options)
-        cmd_list.extend(common_out_opts)
+        cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file)])
+        audio_output_map_options = ["-map", "1:a:0"]
+        cmd_list.extend(video_encoding_options + audio_output_map_options + audio_codec_options + output_target)
     else:
         return None
     
@@ -457,21 +463,4 @@ def main():
     p_clean = subparsers.add_parser('clean', help='Bersihkan file sementara. Contoh: ytlive clean all'); p_clean.add_argument('channel')
     p_lifetime = subparsers.add_parser('lifetime', help='Jadikan stream permanen. Contoh: ytlive lifetime <channel>'); p_lifetime.add_argument('channel')
     for name, func in handler_map.items():
-        if name in subparsers.choices: subparsers.choices[name].set_defaults(func=func)
-    if len(sys.argv) == 1:
-        parser.print_help(); print("\n" + "="*20 + " STATUS CHANNEL SAAT INI " + "="*20); handle_list(None); sys.exit(0)
-    args = parser.parse_args()
-    args.func(args)
-
-if __name__ == "__main__":
-    main()
-EOF
-
-chmod +x "${PYTHON_SCRIPT_PATH}" || { log_error "Gagal membuat skrip Python dapat dieksekusi."; exit 1; }
-log_info "Skrip Python berhasil ditempatkan."
-
-log_info "==================================================="
-log_info "        YTLIVE STREAMER SETUP COMPLETE!"
-log_info "==================================================="
-log_info "Semua perbaikan telah diterapkan. Jalankan 'ytlive' untuk melihat perintah."
-log_info "Selamat melakukan streaming! ✅"
+        if name in subpar
