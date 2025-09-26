@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===================================================================
-#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v15.4 - FINAL FIX FOR DEBIAN 12)
+#           SETUP SCRIPT YTLIVE STREAMER FOR DEBIAN/UBUNTU (v17.0 - SMART INSTALLER)
 # ===================================================================
 
 set -e # HENTIKAN SKRIP JIKA ADA ERROR
@@ -23,21 +23,46 @@ log_error() { echo -e "\e[31m[ERROR]\e[0m $1"; exit 1; }
 log_info "Mengatur zona waktu dan memperbarui paket..."
 timedatectl set-timezone Asia/Jakarta || log_warn "Gagal mengatur zona waktu."
 apt-get update -y >/dev/null || log_error "Gagal memperbarui daftar paket."
-apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests ffmpeg || log_error "Gagal menginstal dependensi."
+# ffmpeg diinstal secara kondisional nanti
+apt-get install -y python3 python3-pip python3-dev gcc wget tar xz-utils acl policykit-1 python3-psutil python3-requests || log_error "Gagal menginstal dependensi dasar."
 
-# --- 2. Pembersihan Total ---
-log_info "Membersihkan instalasi sebelumnya secara total..."
-killall -9 ffmpeg &>/dev/null || true
-systemctl stop 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
+# --- 2. Instalasi FFmpeg Cerdas --- # <-- CEK DI SINI
+if ! command -v ffmpeg &> /dev/null; then
+    log_info "FFmpeg tidak ditemukan, menginstal..."
+    apt-get install -y ffmpeg || log_error "Gagal menginstal FFmpeg."
+    log_info "FFmpeg berhasil diinstal."
+else
+    log_info "FFmpeg sudah terinstal, instalasi dilewati."
+fi
+
+# --- 3. Pembaruan Skrip (Non-Disruptive) --- # <-- CEK DI SINI
+log_info "Memeriksa stream yang sedang berjalan sebelum pembaruan..."
+# Cek apakah ada service ytlive yang aktif
+if systemctl is-active --quiet 'ytlive-stream@*.service'; then
+    log_warn "STREAM AKTIF TERDETEKSI!"
+    log_warn "Skrip tidak akan menghentikan stream yang sedang berjalan."
+    log_warn "Perubahan akan berlaku setelah stream tersebut Anda restart secara manual (ytlive stop/start)."
+else
+    log_info "Tidak ada stream aktif. Melakukan pembersihan standar."
+    # Aman untuk stop karena tidak ada yang aktif
+    systemctl stop 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
+fi
+
+log_info "Menonaktifkan service dan timer lama untuk persiapan pembaruan..."
 systemctl disable 'ytlive-*.service' 'ytlive-*.timer' &>/dev/null || true
-find /etc/systemd/system -name 'ytlive-*' -delete
-rm -f /etc/sudoers.d/ytlive
-systemctl daemon-reload
-rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}"
-(crontab -u ${SERVICE_USER} -r &>/dev/null) || true
-log_info "Pembersihan total selesai."
 
-# --- 3. Buat Direktori & Pengguna ---
+# Hanya hapus file template service, bukan timer yang sudah dibuat
+rm -f /etc/systemd/system/ytlive-stream@.service
+rm -f /etc/systemd/system/ytlive-schedule-start@.service
+rm -f /etc/systemd/system/ytlive-schedule-stop@.service
+rm -f /etc/sudoers.d/ytlive
+
+systemctl daemon-reload
+
+rm -f "${PYTHON_SCRIPT_PATH}" "${WORKER_SCRIPT_PATH}"
+log_info "Pembaruan selesai. Jadwal dan stream aktif tidak diganggu."
+
+# --- 4. Buat Direktori & Pengguna ---
 log_info "Membuat direktori, pengguna, dan izin akses..."
 mkdir -p "${CHANNELS_BASE_DIR}"
 id -g "${SERVICE_GROUP}" &>/dev/null || groupadd "${SERVICE_GROUP}"
@@ -47,13 +72,13 @@ setfacl -m u:${SERVICE_USER}:x /root
 setfacl -m u:${SERVICE_USER}:x /root/data
 log_info "Direktori dan izin akses berhasil dikonfigurasi."
 
-# --- 4. Buat Aturan Izin Sudo ---
+# --- 5. Buat Aturan Izin Sudo ---
 log_info "Membuat aturan Sudo untuk izin service..."
 echo 'ytlive ALL=(ALL) NOPASSWD: /bin/systemctl start ytlive-*, /bin/systemctl stop ytlive-*' | tee /etc/sudoers.d/ytlive
 chmod 0440 /etc/sudoers.d/ytlive
 log_info "Aturan Sudo berhasil dibuat."
 
-# --- 5. Buat Skrip Pekerja (Bash Worker) ---
+# --- 6. Buat Skrip Pekerja (Bash Worker) ---
 log_info "Membuat skrip pekerja di ${WORKER_SCRIPT_PATH}..."
 cat << EOF > "${WORKER_SCRIPT_PATH}"
 #!/bin/bash
@@ -64,7 +89,7 @@ exec \$(/usr/bin/python3 ${PYTHON_SCRIPT_PATH} _internal_get_ffmpeg_cmd "\$CHANN
 EOF
 chmod +x "${WORKER_SCRIPT_PATH}"
 
-# --- 6. Buat Template Service Systemd ---
+# --- 7. Buat Template Service Systemd ---
 log_info "Membuat template service Systemd..."
 cat << EOF > "/etc/systemd/system/ytlive-stream@.service"
 [Unit]
@@ -97,7 +122,7 @@ ExecStart=${PYTHON_SCRIPT_PATH} stop %i
 EOF
 systemctl daemon-reload
 
-# --- 7. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
+# --- 8. Tempatkan Skrip Manajemen (Python CLI) - FINAL ---
 log_info "Menempatkan script manajemen Python ke ${PYTHON_SCRIPT_PATH}..."
 cat << 'EOF' > "${PYTHON_SCRIPT_PATH}"
 #!/usr/bin/env python3
@@ -116,10 +141,9 @@ import re
 # ===================================================================
 # --- CATATAN PERBAIKAN (CHANGELOG) ---
 # ===================================================================
-# v15.3 -> v15.4: Perbaikan Kritis untuk FFMPEG di Debian 12
-#          - Menghapus '-map -0:a' yang menyebabkan error 'Stream map matches no streams'.
-#          - Perintah FFMPEG kini langsung memetakan video (0:v:0) dan audio (1:a:0)
-#            tanpa perlu menonaktifkan audio dari input video secara eksplisit.
+# v16.0 -> v17.0: Smart Installer & Non-Disruptive Update
+#          - Installer kini mengecek jika FFmpeg sudah ada.
+#          - Installer tidak akan menghentikan stream yang sedang berjalan.
 # ===================================================================
 
 # ===================================================================
@@ -186,10 +210,9 @@ def _build_ffmpeg_command(paths, mode):
     elif mode == "B (Video + Audio Harian)":
         audios = sorted(list(paths["dir"].glob("*.mp3")) + list(paths["dir"].glob("*.m4a")))
         daily_audio_file = audios[(day_of_year - 1) % len(audios)]
-        # INI BAGIAN YANG DIPERBAIKI: Menghapus '-map -0:a'
         cmd_list.extend(["-stream_loop", "-1", "-i", str(daily_audio_file),
                          "-map", "0:v:0", "-map", "1:a:0",
-                         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"])
+                         "-c:v", "copy", "-c:a", "copy"])
     else:
         return None
     
